@@ -1,0 +1,71 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Extract Terra Features",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [
+                "--mode", "extract",
+                "--input_dir", "./data/real_data/terra",
+                "--feature_dir", "./data/features/terra",
+                "--class_mapping", "./data/real_data/terra/class_mapping.json",
+                "--batch_size", "32"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "/home/ids/jpabon/miniconda3/envs/synthetic_domain/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "CONDA_DEFAULT_ENV": "synthetic_domain"
+            }
+        },
+        {
+            "name": "Python: Evaluate Terra CLIP",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [
+                "--mode", "clip_test",
+                "--input_dir", "./data/real_data/terra",
+                "--feature_dir", "./data/features/terra",
+                "--class_mapping", "./data/real_data/terra/class_mapping.json",
+                "--prompt_template", "a photo of a {}"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "/home/ids/jpabon/miniconda3/envs/synthetic_domain/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "CONDA_DEFAULT_ENV": "synthetic_domain"
+            }
+        },
+        {
+            "name": "Python: CLIP Adapter Search",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "args": [
+                "--mode", "search_adapter",
+                "--input_dir", "./data/real_data/serengeti",
+                "--feature_dir", "./data/features/serengeti",
+                "--class_mapping", "./data/real_data/serengeti/class_mapping.json",
+                "--use_synthetic",
+                "--n_trials", "20",
+                "--seed", "42",
+                "--patience", "10",
+                "--batch_size", "32",
+                "--prompt_template", "a photo of a {}"
+            ],
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "python": "/home/ids/jpabon/miniconda3/envs/synthetic_domain/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "CONDA_DEFAULT_ENV": "synthetic_domain",
+                "PATH": "/home/ids/jpabon/miniconda3/envs/synthetic_domain/bin:${env:PATH}"
+            }
+        }
+    ]
+} 

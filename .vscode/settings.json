@@ -1,0 +1,6 @@
+{
+    "python.defaultInterpreterPath": "/home/ids/jpabon/miniconda3/envs/synthetic_domain/bin/python",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}"
+    ]
+} 

@@ -5,6 +5,8 @@ from src.generation.synthetic_data import generate_synthetic_data
 from src.utils.utils import get_classes_from_folder
 from src.feature_extraction.feature_extractor import FeatureExtractor
 from src.evaluation.clip_test import ClipEvaluator
+from src.models.clip_adapter import CLIPAdapter
+from src.training.train_adapter import CLIPAdapterTrainer
 from src.config.config import Config
 
 def parse_args():
@@ -94,6 +96,10 @@ def main():
     elif args.mode == 'clip_test':
         clip_evaluator = ClipEvaluator(config)
         clip_evaluator.evaluate()
+    elif args.mode == 'train_clip_adapter':
+        clip_adapter = CLIPAdapter(config.clip_adapter['reduction_factor'], config.device, config.clip_model)
+        clip_trainer = CLIPAdapterTrainer(clip_adapter, config)
+        clip_trainer.train(classes_names=classes)
 
 
 

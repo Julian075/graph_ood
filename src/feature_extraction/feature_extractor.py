@@ -3,7 +3,7 @@ import clip
 import os
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
-from typing import List, Optional, Dict, Tuple
+from typing import List, Dict, Tuple
 import numpy as np
 from tqdm import tqdm
 

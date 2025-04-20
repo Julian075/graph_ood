@@ -5,7 +5,7 @@ from typing import List
 import clip
 
 class CLIPAdapter(nn.Module):
-    def __init__(self, reduction_factor=8, device="cuda", clip_model="ViT-B/32"):
+    def __init__(self, reduction_factor=8, device="cuda", clip_model="ViT-B/16"):
         super().__init__()
         self.device = device
         self.reduction_factor = reduction_factor

@@ -78,7 +78,7 @@ def main():
     elif args.mode == 'extract':
         features={}
         # Extract features 
-        feature_extractor = FeatureExtractor(device="cuda", model_name="ViT-B/16", batch_size=32)
+        feature_extractor = FeatureExtractor(device=config.device, model_name=config.clip_model, batch_size=32)
 
         print('extracting features')
         for split_folder in os.listdir(args.input_dir):

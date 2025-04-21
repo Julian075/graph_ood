@@ -41,16 +41,37 @@ class CLIPAdapterTrainer:
         
         return loss
     
-    def prepare_data(self, features, labels, batch_size):
-        """Prepare data loaders for training/validation."""
-        dataset = TensorDataset(features, labels)
+    def prepare_data(self, data, batch_size,class_to_idx):
+        """
+        Prepare data loaders for training/validation.
+        
+        Args:
+            data: Dictionary containing:
+                - features: Tensor of shape [N, feature_dim]
+                - labels: List or Tensor of labels
+                - paths: List of image paths
+            batch_size: Batch size for the dataloader
+        """
+        # Convert labels to tensor if they're not already
+        # Create mapping for all classes
+        
+        labels = data['labels']
+        labels = torch.tensor([class_to_idx[label] for label in labels])
+            
+        # Create dataset with features and labels
+        dataset = TensorDataset(
+            data['features'],
+            labels,
+            torch.arange(len(data['paths']))  # Create indices for paths lookup
+        )
+        
         dataloader = DataLoader(
             dataset,
             batch_size=batch_size,
             shuffle=True,
             pin_memory=True
         )
-        return dataloader
+        return dataloader, data['paths']  # Return paths separately for reference
     
     def train_epoch(self, train_loader, text_features):
         """Train for one epoch."""
@@ -136,6 +157,10 @@ class CLIPAdapterTrainer:
         """Main training loop with early stopping."""
         # Load features from the feature directory
         self.set_seed()
+
+        unique_classes = sorted({class_name for _, class_name in classes_names})
+        class_to_idx = {class_name: idx for idx, class_name in enumerate(unique_classes)}
+
         feature_file = os.path.join(self.feature_dir, "real_data.pt")
         if not os.path.exists(feature_file):
             raise FileNotFoundError(f"Feature file not found at {feature_file}")
@@ -152,14 +177,14 @@ class CLIPAdapterTrainer:
         print(f"Validation samples: {len(val_features)}")
         
         # Prepare data loaders
-        train_loader = self.prepare_data(train_features, train_labels, self.config.clip_adapter['batch_size'])
-        val_loader = self.prepare_data(val_features, val_labels, self.config.clip_adapter['batch_size'])
+        train_loader, train_paths = self.prepare_data({'features': train_features, 'labels': train_labels, 'paths': all_data['train']['paths']}, self.config.clip_adapter['batch_size'],class_to_idx)
+        val_loader, val_paths = self.prepare_data({'features': val_features, 'labels': val_labels, 'paths': all_data['val']['paths']}, self.config.clip_adapter['batch_size'],class_to_idx)
 
         templates = [self.prompt_template] if isinstance(self.prompt_template, str) else self.prompt_template
         all_text_features = []
         
         for template in templates:
-            prompts = [template.format(class_name) for class_name in classes_names]
+            prompts = [template.format(class_name) for class_name in unique_classes]
             text_features = []
             
             #print(f"\nGenerating text embeddings for template: '{template}'")

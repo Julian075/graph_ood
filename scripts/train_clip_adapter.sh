@@ -29,7 +29,7 @@ CLASS_MAPPING="./data/real_data/serengeti/class_mapping.json"
 # Run CLIP adapter training
 echo "Starting CLIP adapter training..."
 python main.py \
-    --mode train_adapter \
+    --mode train_clip_adapter \
     --input_dir ${DATA_DIR} \
     --feature_dir ${FEATURE_DIR} \
     --class_mapping ${CLASS_MAPPING} \

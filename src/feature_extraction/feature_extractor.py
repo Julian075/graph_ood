@@ -28,7 +28,11 @@ class ImageDataset(Dataset):
 
 class FeatureExtractor:
     """Handle all CLIP model operations and feature extraction"""
-    def __init__(self, device: str, model_name: str = "ViT-B/16", batch_size: int = 32):
+    def __init__(self, classes: List[str], device: str, model_name: str = "ViT-B/16", batch_size: int = 32):
+        map_class={}
+        for folder_name, class_name in classes:
+            map_class[folder_name] = class_name
+        self.classes = map_class
         self.device = device
         self.batch_size = batch_size
         print(f"Loading CLIP {model_name} model on {device}...")
@@ -86,7 +90,7 @@ class FeatureExtractor:
             for file in files:
                 if file.lower().endswith(('.png', '.jpg', '.jpeg')):
                     image_paths.append(os.path.join(root, file))
-                    labels.append(class_name)
+                    labels.append(self.classes[class_name])
                     
         return image_paths, labels
 

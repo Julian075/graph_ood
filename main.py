@@ -78,13 +78,13 @@ def main():
     elif args.mode == 'extract':
         features={}
         # Extract features 
-        feature_extractor = FeatureExtractor(device=config.device, model_name=config.clip_model, batch_size=32)
+        feature_extractor = FeatureExtractor(classes=classes,device=config.device, model_name=config.clip_model, batch_size=32)
 
         print('extracting features')
         for split_folder in os.listdir(args.input_dir):
-            split_folder = os.path.join(args.input_dir, split_folder)
-            if os.path.isdir(split_folder):
-                features[split_folder] = feature_extractor.process_directory(split_folder)
+            split_folder_path = os.path.join(args.input_dir, split_folder)
+            if os.path.isdir(split_folder_path):
+                features[split_folder] = feature_extractor.process_directory(split_folder_path)
         torch.save(features, os.path.join(args.feature_dir, 'real_data.pt'))
 
         if args.use_synthetic_data:
@@ -94,7 +94,7 @@ def main():
                     features_synthetic= feature_extractor.process_directory(args.synthetic_dir)
                     torch.save(features_synthetic, os.path.join(args.feature_dir, 'synthetic_features.pt'))
     elif args.mode == 'clip_test':
-        clip_evaluator = ClipEvaluator(config)
+        clip_evaluator = ClipEvaluator(classes=classes, config=config)
         clip_evaluator.evaluate()
     elif args.mode == 'train_clip_adapter':
         clip_adapter = CLIPAdapter(config.clip_adapter['reduction_factor'], config.device, config.clip_model)

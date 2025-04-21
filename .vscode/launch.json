@@ -42,20 +42,16 @@
             }
         },
         {
-            "name": "Python: CLIP Adapter Search",
+            "name": "Python: CLIP Adapter Training",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/main.py",
             "args": [
-                "--mode", "search_adapter",
+                "--mode", "train_clip_adapter",
                 "--input_dir", "./data/real_data/serengeti",
                 "--feature_dir", "./data/features/serengeti",
                 "--class_mapping", "./data/real_data/serengeti/class_mapping.json",
-                "--use_synthetic",
-                "--n_trials", "20",
-                "--seed", "42",
-                "--patience", "10",
-                "--batch_size", "32",
+                "--use_synthetic_data", "True",
                 "--prompt_template", "a photo of a {}"
             ],
             "console": "integratedTerminal",

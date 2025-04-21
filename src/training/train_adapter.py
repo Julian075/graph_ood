@@ -229,6 +229,7 @@ class CLIPAdapterTrainer:
                 self.save_checkpoint(val_acc)
             else:
                 patience_counter += 1
+                
                 print(f"Validation accuracy did not improve. Patience: {patience_counter}/{self.config.clip_adapter['patience']}")
             
             if patience_counter >= self.config.clip_adapter['patience']:

@@ -79,7 +79,7 @@ class CLIPAdapterTrainer:
         total_loss = 0
         num_batches = 0
         
-        for batch_features, batch_labels in tqdm(train_loader, desc="Training"):
+        for batch_features, batch_labels,_ in tqdm(train_loader, desc="Training"):
             # Move batch to device
             batch_features = batch_features.to(self.device)
             batch_labels = batch_labels.to(self.device)
@@ -107,7 +107,7 @@ class CLIPAdapterTrainer:
         total = 0
         
         with torch.no_grad():
-            for batch_features, batch_labels in tqdm(val_loader, desc="Validating"):
+            for batch_features, batch_labels,_ in tqdm(val_loader, desc="Validating"):
                 # Move batch to device
                 batch_features = batch_features.to(self.device)
                 batch_labels = batch_labels.to(self.device)
@@ -229,9 +229,9 @@ class CLIPAdapterTrainer:
                 self.save_checkpoint(val_acc)
             else:
                 patience_counter += 1
-                print(f"Validation accuracy did not improve. Patience: {patience_counter}/{self.config.patience}")
+                print(f"Validation accuracy did not improve. Patience: {patience_counter}/{self.config.clip_adapter['patience']}")
             
-            if patience_counter >= self.config.patience:
+            if patience_counter >= self.config.clip_adapter['patience']:
                 print("\nEarly stopping triggered!")
                 break
         

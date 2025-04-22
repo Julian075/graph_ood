@@ -89,7 +89,7 @@ class ClipEvaluator:
         """
         # First collect all unique classes (from class_names and labels)
         initial_classes = {class_name for _, class_name in class_names}
-        #all_classes = list(initial_classes.union(set(labels))) # TO DO: check for serengeti where labels are foldername (number)
+        #all_classes = list(initial_classes.union(set(labels))) #
         all_classes = sorted(initial_classes.union(set(labels)))
         # Create mapping for all classes
         class_to_idx = {class_name: idx for idx, class_name in enumerate(all_classes)} 

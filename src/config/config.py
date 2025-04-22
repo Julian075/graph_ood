@@ -1,6 +1,7 @@
 class Config:
-    def __init__(self, feature_dir: str, class_mapping: str, prompt_template: str, device: str):
+    def __init__(self, feature_dir: str, feature_dir_ood: str,class_mapping: str, prompt_template: str, device: str):
         self.feature_dir = feature_dir
+        self.feature_dir_ood = feature_dir_ood
         self.output_dir = "./checkpoints"
         self.class_mapping = class_mapping
         self.prompt_template = prompt_template

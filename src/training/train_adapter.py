@@ -121,9 +121,9 @@ class CLIPAdapterTrainer:
         num_batches = 0
 
         # Debug: verificar parámetros entrenables al inicio de la época
-        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        print(f"Número de parámetros entrenables: {trainable_params}")
-        params_before = {name: param.clone().detach() for name, param in self.model.named_parameters()}
+        #trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        #print(f"Número de parámetros entrenables: {trainable_params}")
+        #params_before = {name: param.clone().detach() for name, param in self.model.named_parameters()}
         
         for batch_features, batch_labels, _ in tqdm(train_loader, desc="Training"):
             # Move batch to device and normalize
@@ -145,13 +145,13 @@ class CLIPAdapterTrainer:
             self.scaler.update()
             
             # Debug: verificar si los parámetros cambiaron
-            if num_batches == 0:
-                print("\nCambios en parámetros después del primer batch:")
-                for name, param in self.model.named_parameters():
-                    if param.requires_grad:
-                        param_change = (param - params_before[name]).norm().item()
-                        print(f"{name}: {param_change:.6f}")
-            
+            #if num_batches == 0:
+            #    print("\nCambios en parámetros después del primer batch:")
+            #    for name, param in self.model.named_parameters():
+            #        if param.requires_grad:
+            #            param_change = (param - params_before[name]).norm().item()
+            #            print(f"{name}: {param_change:.6f}")
+            #
             total_loss += loss.item()
             num_batches += 1
         

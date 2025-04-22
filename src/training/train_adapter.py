@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from torch.cuda.amp import GradScaler, autocast
@@ -12,8 +11,10 @@ class CLIPAdapterTrainer:
         self.model = model.to(config.device)
         self.config = config
         self.device = config.device
+        self.seed = config.clip_adapter['seed']
         self.feature_dir = config.feature_dir
         self.prompt_template = config.prompt_template
+        self.use_synthetic_data = config.use_synthetic_data
         self.optimizer = torch.optim.Adam(
             model.parameters(),
             lr=config.clip_adapter['learning_rate']
@@ -82,7 +83,7 @@ class CLIPAdapterTrainer:
         # Average over the batch
         return loss.mean()
     
-    def prepare_data(self, data, batch_size,class_to_idx):
+    def prepare_data(self, data, batch_size, class_to_idx):
         """
         Prepare data loaders for training/validation.
         
@@ -92,12 +93,18 @@ class CLIPAdapterTrainer:
                 - labels: List or Tensor of labels
                 - paths: List of image paths
             batch_size: Batch size for the dataloader
+            class_to_idx: Dictionary mapping class names to indices
         """
-        # Convert labels to tensor if they're not already
-        # Create mapping for all classes
-        
+        # Convert labels to indices if they're not already
         labels = data['labels']
-        labels = torch.tensor([class_to_idx[label] for label in labels])
+        if isinstance(labels, list):
+            # Convert labels to indices
+            label_indices = [class_to_idx[str(label) if isinstance(label, tuple) else label] for label in labels]
+            labels = torch.tensor(label_indices)
+        elif isinstance(labels, torch.Tensor) and labels.dtype != torch.int64:
+            # If tensor but not indices, convert to indices
+            label_indices = [class_to_idx[str(label.item())] for label in labels]
+            labels = torch.tensor(label_indices)
             
         # Create dataset with features and labels
         dataset = TensorDataset(
@@ -193,11 +200,16 @@ class CLIPAdapterTrainer:
             'val_acc': val_acc,
             'config': self.config
         }
-        
-        checkpoint_path = os.path.join(
-            self.config.output_dir,'clip_adapter',
-            f'adapter_checkpoint.pt'
-        )
+        if self.use_synthetic_data:
+            checkpoint_path = os.path.join(
+                self.config.output_dir,'clip_adapter',
+                f'adapter_checkpoint_synthetic.pt'
+            )
+        else:
+            checkpoint_path = os.path.join(
+                self.config.output_dir,'clip_adapter',
+                f'adapter_checkpoint.pt'
+            )
         torch.save(checkpoint, checkpoint_path)
         
     def load_checkpoint(self, checkpoint_path):
@@ -209,9 +221,9 @@ class CLIPAdapterTrainer:
     
     def set_seed(self):
         """Set seed for reproducibility."""
-        torch.manual_seed(self.config.clip_adapter['seed'])
+        torch.manual_seed(self.seed)
         if torch.cuda.is_available():
-            torch.cuda.manual_seed(self.config.clip_adapter['seed'])
+            torch.cuda.manual_seed(self.seed)
     
     def train(self, classes_names):
         """Main training loop with early stopping."""
@@ -226,6 +238,25 @@ class CLIPAdapterTrainer:
         if not os.path.exists(feature_file):
             raise FileNotFoundError(f"Feature file not found at {feature_file}")
         all_data = torch.load(feature_file)
+        if self.use_synthetic_data:
+            feature_file_synthetic = os.path.join(self.feature_dir, "synthetic_features.pt")
+            if not os.path.exists(feature_file_synthetic):
+                raise FileNotFoundError(f"Feature file not found at {feature_file_synthetic}")
+            all_data_synthetic = torch.load(feature_file_synthetic)
+            all_data['train']['features'] = torch.cat([all_data['train']['features'], all_data_synthetic['features']])
+            
+            # Convert labels to indices first, then to tensors
+            if isinstance(all_data['train']['labels'], list):
+                train_label_indices = [class_to_idx[str(label) if isinstance(label, tuple) else label] for label in all_data['train']['labels']]
+                all_data['train']['labels'] = torch.tensor(train_label_indices)
+            
+            if isinstance(all_data_synthetic['labels'], list):
+                synthetic_label_indices = [class_to_idx[str(label) if isinstance(label, tuple) else label] for label in all_data_synthetic['labels']]
+                all_data_synthetic['labels'] = torch.tensor(synthetic_label_indices)
+            
+            all_data['train']['labels'] = torch.cat([all_data['train']['labels'], all_data_synthetic['labels']])
+            all_data['train']['paths'] = all_data['train']['paths'] + all_data_synthetic['paths']
+            
 
         # Get train and val splits
         train_features = all_data['train']['features']

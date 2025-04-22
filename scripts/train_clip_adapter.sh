@@ -2,7 +2,7 @@
 #SBATCH --job-name=clip_adapter_train        # Name of your job
 #SBATCH --output=./logs/%x_%j.out           # Output file (%x for job name, %j for job ID)
 #SBATCH --error=./logs/%x_%j.err            # Error file
-#SBATCH --partition=A40                      # Select a partition to submit
+#SBATCH --partition=P100                      # Select a partition to submit
 #SBATCH --gres=gpu:1                        # Request 1 GPU
 #SBATCH --cpus-per-task=8                   # Request 8 CPU cores
 #SBATCH --mem=32G                           # Request 32 GB of memory

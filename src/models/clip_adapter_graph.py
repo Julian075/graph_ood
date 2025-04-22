@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import autocast
-import numpy as np
 
-class CLIPAdapter(nn.Module):
-    def __init__(self, reduction_factor=8, seed=42, device="cuda"):
+
+class CLIPAdapterGraph(nn.Module):
+    def __init__(self, reduction_factor=8, device="cuda"):
         super().__init__()
         self.device = device
         self.reduction_factor = reduction_factor
@@ -23,16 +23,8 @@ class CLIPAdapter(nn.Module):
  
         # Move model to device
         self.to(device)
-        self.seed = seed
-
     
     @autocast()
-    def set_seed(self, seed):
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(seed)
-        np.random.seed(seed)
-        
     def forward(self, x):
         """
         Forward pass with automatic mixed precision

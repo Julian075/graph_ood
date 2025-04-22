@@ -21,7 +21,8 @@ class ClipAdapterEvaluator:
         self.config = config
         self.device = config.device
         self.ood_test = ood_test
-        self.classes = classes
+        # Ensure classes are strings
+        self.classes = [str(c) if isinstance(c, tuple) else c for c in classes]
         self.prompt_template = config.prompt_template
         
         # Load CLIP model
@@ -29,9 +30,15 @@ class ClipAdapterEvaluator:
         self.clip.eval()
         
         # Load adapter model from checkpoint
-        checkpoint_path = os.path.join(config.output_dir, 'clip_adapter', 'adapter_checkpoint.pt')
+        if config.use_synthetic_data:
+            checkpoint_path = os.path.join(config.output_dir, 'clip_adapter', 'adapter_checkpoint_synthetic.pt')
+        else:
+            checkpoint_path = os.path.join(config.output_dir, 'clip_adapter', 'adapter_checkpoint.pt')
         checkpoint = torch.load(checkpoint_path, weights_only=False)
-        self.model = model.load_state_dict(checkpoint['model_state_dict'])
+        self.model = model
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model.to(self.device)
+        self.model.eval()
         self.model.to(self.device)
         self.model.eval()
         
@@ -64,6 +71,9 @@ class ClipAdapterEvaluator:
         Returns:
             Dictionary containing evaluation metrics
         """
+        # Convert test labels to strings if they're tuples
+        test_labels = [str(label) if isinstance(label, tuple) else label for label in test_labels]
+        
         # Collect all unique classes (from training and test)
         all_classes = sorted(set(self.classes).union(set(test_labels)))
         

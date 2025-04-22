@@ -1,6 +1,7 @@
 import os
 import torch
 import argparse
+import copy
 from src.generation.synthetic_data import generate_synthetic_data
 from src.utils.utils import get_classes_from_folder
 from src.feature_extraction.feature_extractor import FeatureExtractor
@@ -8,6 +9,7 @@ from src.evaluation.clip_test import ClipEvaluator
 from src.evaluation.clip_adapter_eval import ClipAdapterEvaluator
 from src.models.clip_adapter import CLIPAdapter
 from src.training.train_adapter import CLIPAdapterTrainer
+from src.utils.hyperparameter_search import RandomSearch, SearchSpace
 from src.config.config import Config
 
 def parse_args():
@@ -20,8 +22,9 @@ def parse_args():
                       help='Directory containing dataset')
     parser.add_argument('--input_dir_ood', type=str, required=False, default="",
                       help='Directory containing OOD dataset')
-    parser.add_argument('--use_synthetic_data', type=bool,default=False, required=False,
-                      help='Use synthetic data')
+    parser.add_argument('--use_synthetic_data', type=str, default='False',
+                      choices=['True', 'False'],
+                      help='Use synthetic data (True/False)')
     parser.add_argument('--synthetic_dir', type=str, required=False,
                       help='Directory to store synthetic images')
     parser.add_argument('--feature_dir', type=str, required=False,
@@ -32,8 +35,9 @@ def parse_args():
                       help='JSON file mapping folder names to class names')
     
     # Optional arguments
-    parser.add_argument('--OOD_test', type=bool, default=False,
-                      help='OOD test')
+    parser.add_argument('--OOD_test', type=str, default='False',
+                      choices=['True', 'False'],
+                      help='OOD test (True/False)')
     parser.add_argument('--images_per_class', type=int, default=100,
                       help='Number of synthetic images to generate per class')
     parser.add_argument('--prompt_template', type=str, default="a photo of a {}",
@@ -44,15 +48,23 @@ def parse_args():
                       help='Ending index for generation')
     parser.add_argument('--seed', type=int, default=42,
                       help='Random seed for reproducibility')
-    parser.add_argument('--hyperparameter_search', type=bool, default=False,
-                      help='Hyperparameter search')
+    parser.add_argument('--hyperparameter_search', type=str, default='False',
+                      choices=['True', 'False'],
+                      help='Hyperparameter search (True/False)')
     
-    return parser.parse_args()
+    args = parser.parse_args()
+    
+    # Convert string booleans to actual booleans
+    args.use_synthetic_data = args.use_synthetic_data.lower() == 'true'
+    args.OOD_test = args.OOD_test.lower() == 'true'
+    args.hyperparameter_search = args.hyperparameter_search.lower() == 'true'
+    
+    return args
 
 def main():
     args = parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    config = Config(args.feature_dir, args.feature_dir_ood, args.class_mapping, args.prompt_template, device)
+    config = Config(args.feature_dir, args.feature_dir_ood, args.class_mapping, args.prompt_template, args.use_synthetic_data, device)
     # Get classes from training directory
     print("\nGetting classes from training directory...")
     train_folder = os.path.join(args.input_dir, "train")
@@ -60,7 +72,7 @@ def main():
     print(f"Found {len(classes)} classes")
     if args.OOD_test:
         classes_ood = get_classes_from_folder(args.input_dir_ood, args.class_mapping)
-        print(f"Found {len(classes_ood)} classes")
+        print(f"Found {len(classes_ood)} classes in OOD dataset")
     
     if args.mode == 'generate':
         # Create output directory if it doesn't exist
@@ -110,18 +122,74 @@ def main():
         clip_evaluator.evaluate()
     elif args.mode == 'train_clip_adapter':
         if args.hyperparameter_search:
-            a=0 #TO_DO: hyperparameter search
-        else:
-            clip_adapter = CLIPAdapter(config.clip_adapter['reduction_factor'], config.device)
+            search_space = config.clip_adapter['search_space']
+            
+            # Convert config search spaces to SearchSpace objects
+            search_spaces = []
+            for param_name, param_config in search_space['search_spaces'].items():
+                search_spaces.append(
+                    SearchSpace(
+                        name=param_name,
+                        type=param_config['type'],
+                        range=param_config['range'],
+                        log_scale=param_config.get('log_scale', False)
+                    )
+                )
+            
+            # Initialize random search
+            random_search = RandomSearch(
+                search_spaces=search_spaces,
+                n_trials=search_space['n_trials'],
+                metric_name=search_space['metric_name'],
+                maximize=search_space['maximize'],
+                seed=config.clip_adapter['seed']
+            )
+            
+            # Define training function for hyperparameter search
+            def train_with_params(params):
+                # Update config with new parameters
+                current_config = copy.deepcopy(config)
+                for param_name, param_value in params.items():
+                    current_config.clip_adapter[param_name] = param_value
+                
+                # Initialize model and trainer with current parameters
+                clip_adapter = CLIPAdapter(
+                    reduction_factor=current_config.clip_adapter['reduction_factor'],
+                    device=current_config.device
+                )
+                clip_trainer = CLIPAdapterTrainer(clip_adapter, current_config)
+                
+                # Train and return validation accuracy
+                val_acc = clip_trainer.train(classes_names=classes)
+                return val_acc
+            
+            # Run hyperparameter search
+            print("\nStarting hyperparameter search...")
+            best_params = random_search.search(
+                train_fn=train_with_params,
+                output_dir=os.path.join(config.output_dir, 'clip_adapter', 'hyperparameter_search'),
+                verbose=True
+            )
+            
+            # Train final model with best parameters
+            print("\nTraining final model with best parameters...")
+            for param_name, param_value in best_params.items():
+                config.clip_adapter[param_name] = param_value
+                
+            clip_adapter = CLIPAdapter(config.clip_adapter['reduction_factor'], config.clip_adapter['seed'], config.device)
             clip_trainer = CLIPAdapterTrainer(clip_adapter, config)
             clip_trainer.train(classes_names=classes)
-            
-            #test
-            if args.OOD_test:
-                clip_evaluator = ClipAdapterEvaluator(model=clip_adapter, classes=classes_ood, ood_test=True, config=config)
-            else:
-                clip_evaluator = ClipAdapterEvaluator(model=clip_adapter, classes=classes, ood_test=False, config=config)
-            clip_evaluator.evaluate()
+        else:
+            clip_adapter = CLIPAdapter(config.clip_adapter['reduction_factor'],config.clip_adapter['seed'], config.device)
+            clip_trainer = CLIPAdapterTrainer(clip_adapter, config)
+            clip_trainer.train(classes_names=classes)
+        
+        # Test phase
+        if args.OOD_test:
+            clip_evaluator = ClipAdapterEvaluator(model=clip_adapter, classes=classes_ood, ood_test=True, config=config)
+        else:
+            clip_evaluator = ClipAdapterEvaluator(model=clip_adapter, classes=classes, ood_test=False, config=config)
+        clip_evaluator.evaluate()
 
 
 if __name__ == "__main__":

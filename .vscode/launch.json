@@ -51,7 +51,9 @@
                 "--input_dir", "./data/real_data/serengeti",
                 "--feature_dir", "./data/features/serengeti",
                 "--class_mapping", "./data/real_data/serengeti/class_mapping.json",
-                "--use_synthetic_data", "True",
+                "--input_dir_ood", "./data/real_data/terra",
+                "--feature_dir_ood", "./data/features/terra",
+                "--use_synthetic_data", "False",
                 "--prompt_template", "a photo of a {}"
             ],
             "console": "integratedTerminal",

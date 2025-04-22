@@ -118,11 +118,10 @@ def main():
             
             #test
             if args.OOD_test:
-                clip_evaluator = ClipAdapterEvaluator(classes=classes_ood, ood_test=True, config=config)
-                clip_evaluator.evaluate()
+                clip_evaluator = ClipAdapterEvaluator(model=clip_adapter, classes=classes_ood, ood_test=True, config=config)
             else:
-                clip_evaluator = ClipAdapterEvaluator(classes=classes, ood_test=False, config=config)
-                clip_evaluator.evaluate()
+                clip_evaluator = ClipAdapterEvaluator(model=clip_adapter, classes=classes, ood_test=False, config=config)
+            clip_evaluator.evaluate()
 
 
 if __name__ == "__main__":

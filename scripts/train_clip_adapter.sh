@@ -23,18 +23,21 @@ DATA_DIR="./data/real_data/serengeti"
 FEATURE_DIR="./data/features/serengeti"
 OUTPUT_DIR="./checkpoints"
 CLASS_MAPPING="./data/real_data/serengeti/class_mapping.json"
-
-
+DATA_DIR_OOD="./data/real_data/terra"
+FEATURE_DIR_OOD="./data/features/terra"
 
 # Run CLIP adapter training
 echo "Starting CLIP adapter training..."
 python main.py \
     --mode train_clip_adapter \
     --input_dir ${DATA_DIR} \
+    --input_dir_ood ${DATA_DIR_OOD} \
     --feature_dir ${FEATURE_DIR} \
+    --feature_dir_ood ${FEATURE_DIR_OOD} \
     --class_mapping ${CLASS_MAPPING} \
     --use_synthetic_data True \
     --prompt_template "a photo of a {}" \
+    --OOD_test True \
 
 
 # Print job completion time

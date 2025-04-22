@@ -5,138 +5,149 @@ import random
 import logging
 from pathlib import Path
 import json
-from typing import Callable, Dict, Any, Tuple, Optional, Union
+from typing import Callable, Dict, Any, Tuple, Optional, Union, List
+import copy
+from dataclasses import dataclass
+from tqdm import tqdm
 
-def sample_hyperparameters(search_space: Dict[str, Tuple[Any, str]], seed: Optional[int] = None) -> Dict[str, Any]:
-    """Sample hyperparameters from the search space
-    
-    Args:
-        search_space: Dictionary mapping parameter names to their search space definition
-                     Format: {param_name: (values, scale)} where scale can be:
-                     - 'log': logarithmic scale between min and max values
-                     - 'linear': linear scale between min and max values
-                     - 'choice': discrete choice from list of values
-        seed: Random seed for reproducibility
-        
-    Returns:
-        Dictionary with sampled parameters
-    """
-    if seed is not None:
-        np.random.seed(seed)
-        
-    params = {}
-    for name, (space_def, scale) in search_space.items():
-        if scale == 'choice':
-            value = np.random.choice(space_def)
-            # Convert numpy types to Python native types
-            if isinstance(value, (np.integer, np.floating)):
-                value = value.item()
-            params[name] = value
-        elif scale == 'log':
-            min_val, max_val = space_def
-            value = np.exp(
-                np.random.uniform(np.log(min_val), np.log(max_val))
-            )
-            params[name] = float(value)  # Convert to Python float
-        else:  # linear
-            min_val, max_val = space_def
-            value = np.random.uniform(min_val, max_val)
-            params[name] = float(value)  # Convert to Python float
-    
-    return params
+@dataclass
+class SearchSpace:
+    """Define a parameter search space"""
+    name: str
+    type: str  # 'float', 'int', 'categorical'
+    range: Union[List[Any], tuple]  # List for categorical, tuple (min, max) for numeric
+    log_scale: bool = False  # Whether to sample on log scale for numeric values
 
-def setup_random_seeds(seed: int) -> None:
-    """Setup all random seeds for reproducibility
-    
-    Args:
-        seed: Seed value to use
-    """
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-def random_search(
-    train_fn: Callable[[Dict[str, Any]], Tuple[float, str]],
-    search_space: Dict[str, Tuple[Any, str]],
-    n_trials: int = 20,
-    seed: Optional[int] = None,
-    output_dir: Optional[str] = None,
-    maximize: bool = True
-) -> Tuple[Dict[str, Any], float, str]:
-    """Generic random search for hyperparameter optimization
-    
-    Args:
-        train_fn: Training function that takes hyperparameters dict and returns
-                 (metric_value, model_path). The metric_value will be maximized/minimized
-        search_space: Dictionary defining the search space for each parameter
-        n_trials: Number of trials to run
-        seed: Random seed for reproducibility
-        output_dir: Directory to save search results. If None, results won't be saved
-        maximize: Whether to maximize or minimize the metric
+class RandomSearch:
+    def __init__(
+        self,
+        search_spaces: List[SearchSpace],
+        n_trials: int,
+        metric_name: str,
+        maximize: bool = True,
+        seed: Optional[int] = None
+    ):
+        """
+        Initialize random search.
         
-    Returns:
-        Tuple containing:
-        - Dictionary with best hyperparameters
-        - Best metric value achieved
-        - Path to the best model
-    """
-    # Setup reproducibility if seed provided
-    if seed is not None:
-        setup_random_seeds(seed)
-    
-    # Setup logging and results directory if provided
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-        logging.basicConfig(
-            filename=os.path.join(output_dir, "search.log"),
-            level=logging.INFO,
-            format='%(asctime)s - %(message)s'
-        )
-    
-    best_metric = float('-inf') if maximize else float('inf')
-    best_config = None
-    best_model_path = None
-    all_results = []
-    
-    for trial in range(n_trials):
-        # Sample hyperparameters
-        trial_seed = seed * 100 + trial if seed is not None else None
-        hp = sample_hyperparameters(search_space, seed=trial_seed)
+        Args:
+            search_spaces: List of SearchSpace objects defining parameter ranges
+            n_trials: Number of random trials to run
+            metric_name: Name of the metric to optimize
+            maximize: Whether to maximize (True) or minimize (False) the metric
+            seed: Random seed for reproducibility
+        """
+        self.search_spaces = search_spaces
+        self.n_trials = n_trials
+        self.metric_name = metric_name
+        self.maximize = maximize
+        self.best_params = None
+        self.best_score = float('-inf') if maximize else float('inf')
+        self.results = []
         
-        message = f"\nTrial {trial + 1}/{n_trials}\nParameters: {hp}"
-        if output_dir:
-            logging.info(message)
-        print(message)
+        if seed is not None:
+            random.seed(seed)
+            np.random.seed(seed)
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed(seed)
+    
+    def _sample_parameter(self, space: SearchSpace) -> Any:
+        """Sample a single parameter from its search space"""
+        if space.type == 'categorical':
+            return random.choice(space.range)
         
-        # Train and evaluate with current hyperparameters
-        metric_value, model_path = train_fn(hp)
-        
-        # Save trial results
-        trial_results = {
-            'trial': trial,
-            'hyperparameters': hp,
-            'metric_value': metric_value,
-            'model_path': model_path
+        min_val, max_val = space.range
+        if space.log_scale:
+            log_min = np.log(min_val)
+            log_max = np.log(max_val)
+            value = np.exp(random.uniform(log_min, log_max))
+        else:
+            value = random.uniform(min_val, max_val)
+            
+        if space.type == 'int':
+            value = int(round(value))
+            
+        return value
+    
+    def _sample_parameters(self) -> Dict[str, Any]:
+        """Sample a complete set of parameters"""
+        return {
+            space.name: self._sample_parameter(space)
+            for space in self.search_spaces
         }
-        all_results.append(trial_results)
-        
-        # Update best if necessary
-        is_better = metric_value > best_metric if maximize else metric_value < best_metric
-        if is_better:
-            best_metric = metric_value
-            best_config = hp.copy()
-            best_model_path = model_path
-            message = f"New best {'maximum' if maximize else 'minimum'}: {best_metric:.4f}"
-            if output_dir:
-                logging.info(message)
-            print(message)
-        
-        # Save all results if output directory provided
-        if output_dir:
-            with open(os.path.join(output_dir, "search_results.json"), 'w') as f:
-                json.dump(all_results, f, indent=2)
     
-    return best_config, best_metric, best_model_path 
+    def search(
+        self,
+        train_fn: Callable[[Dict[str, Any]], float],
+        output_dir: Optional[str] = None,
+        verbose: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Perform random search.
+        
+        Args:
+            train_fn: Function that takes parameters dict and returns metric value
+            output_dir: Optional directory to save results
+            verbose: Whether to print progress
+            
+        Returns:
+            Dictionary containing best parameters found
+        """
+        for trial in tqdm(range(self.n_trials), desc="Random Search"):
+            # Sample parameters
+            params = self._sample_parameters()
+            
+            if verbose:
+                print(f"\nTrial {trial + 1}/{self.n_trials}")
+                print("Parameters:", params)
+            
+            # Train and evaluate
+            try:
+                score = train_fn(params)
+                
+                # Update results
+                result = {
+                    'trial': trial,
+                    'parameters': params,
+                    self.metric_name: score
+                }
+                self.results.append(result)
+                
+                # Update best if better
+                is_better = score > self.best_score if self.maximize else score < self.best_score
+                if is_better:
+                    self.best_score = score
+                    self.best_params = copy.deepcopy(params)
+                    
+                    if verbose:
+                        print(f"New best {self.metric_name}: {score:.4f}")
+                
+                # Save intermediate results
+                if output_dir:
+                    self._save_results(output_dir)
+                    
+            except Exception as e:
+                print(f"Error in trial {trial + 1}: {str(e)}")
+                continue
+        
+        if verbose:
+            print("\nSearch completed!")
+            print(f"Best {self.metric_name}: {self.best_score:.4f}")
+            print("Best parameters:", self.best_params)
+        
+        return self.best_params
+    
+    def _save_results(self, output_dir: str):
+        """Save search results to JSON file"""
+        os.makedirs(output_dir, exist_ok=True)
+        
+        results_dict = {
+            'best_parameters': self.best_params,
+            f'best_{self.metric_name}': self.best_score,
+            'all_trials': self.results
+        }
+        
+        output_file = os.path.join(output_dir, 'random_search_results.json')
+        with open(output_file, 'w') as f:
+            json.dump(results_dict, f, indent=2)

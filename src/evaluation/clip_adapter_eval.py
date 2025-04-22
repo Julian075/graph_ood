@@ -7,8 +7,9 @@ from tqdm import tqdm
 import os
 from typing import List, Dict, Optional
 
+
 class ClipAdapterEvaluator:
-    def __init__(self, classes: List[str], ood_test: bool, config):
+    def __init__(self, model, classes: List[str], ood_test: bool, config):
         """
         Initialize the evaluator.
         
@@ -29,8 +30,8 @@ class ClipAdapterEvaluator:
         
         # Load adapter model from checkpoint
         checkpoint_path = os.path.join(config.output_dir, 'clip_adapter', 'adapter_checkpoint.pt')
-        checkpoint = torch.load(checkpoint_path)
-        self.model = checkpoint['model_state_dict']
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
+        self.model = model.load_state_dict(checkpoint['model_state_dict'])
         self.model.to(self.device)
         self.model.eval()
         

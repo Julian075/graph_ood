@@ -7,10 +7,10 @@ class Config:
         self.device = device
         self.clip_model = "ViT-B/16"
         self.clip_adapter = {
-            "reduction_factor": 2,
-            "learning_rate": 0.01,
+            "reduction_factor": 8,
+            "learning_rate": 1e-2,
             "batch_size": 32,
-            "temperature": 0.09,
+            "temperature": 0.07,
             "num_epochs": 10,
             "patience": 5,
             "seed": 42

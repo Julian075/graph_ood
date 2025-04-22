@@ -2,12 +2,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
+from torch.cuda.amp import GradScaler, autocast
 import os
 from tqdm import tqdm
-
+import clip
+from typing import List
 class CLIPAdapterTrainer:
     def __init__(self, model, config):
-        self.model = model
+        self.model = model.to(config.device)
         self.config = config
         self.device = config.device
         self.feature_dir = config.feature_dir
@@ -17,29 +19,68 @@ class CLIPAdapterTrainer:
             lr=config.clip_adapter['learning_rate']
         )
         self.temperature = config.clip_adapter['temperature']
+        self.clip, _ = clip.load(config.clip_model, device=config.device)
+        self.clip.eval()  # Set to eval mode to freeze parameters
         
-    def compute_loss(self, image_features, text_features, labels):
+        # Initialize gradient scaler for AMP
+        self.scaler = GradScaler()
+    
+    def encode_text(self, text_prompts: List[str], normalize: bool = True) -> torch.Tensor:
+        """Encode text prompts using CLIP"""
+        with torch.no_grad():
+            text_tokens = clip.tokenize(text_prompts).to(self.device)
+            text_features = self.clip.encode_text(text_tokens)
+            if normalize:
+                text_features = torch.nn.functional.normalize(text_features, dim=-1)
+        return text_features
+        
+    def compute_cross_entropy_loss(self, image_features, text_features, labels):
         """
-        Compute InfoNCE/NTXent loss between image and text features.
+        Compute standard cross entropy loss between image and text features.
         
         Args:
             image_features: Tensor of shape [batch_size, feature_dim]
             text_features: Tensor of shape [num_classes, feature_dim]
             labels: Tensor of shape [batch_size] containing class indices
         """
+        # Compute similarity scores
+        logits = torch.matmul(image_features, text_features.T)/self.temperature
+        
+        # Apply temperature scaling
+        logits = logits
+        
+        # Use standard cross entropy loss
+        loss = F.cross_entropy(logits, labels)
+        return loss
+    
+    def compute_contrastive_loss(self, image_features, text_features, labels):
+        """
+   
+        Args:
+            image_features: Tensor of shape [batch_size, feature_dim]
+            text_features: Tensor of shape [num_classes, feature_dim]
+            labels: Tensor of shape [batch_size] containing class indices
+        """
         # Compute similarity matrix
-        logits = torch.matmul(image_features, text_features.T) / self.temperature
+        logits = torch.matmul(image_features, text_features.T)  # [batch_size, num_classes]
         
-        # For each image, its positive pair is the text embedding of its class
-        positive_logits = logits[torch.arange(len(labels)), labels]
+        # Scale logits by temperature
+        logits = logits / self.temperature
         
-        # InfoNCE loss: -log(exp(pos_logit) / sum(exp(all_logits)))
-        nll = -positive_logits + torch.logsumexp(logits, dim=1)
+        # Get positive pair logits using the labels
+        positive_logits = logits[torch.arange(logits.size(0)), labels]  # [batch_size]
+        
+        # Compute exp(logits) for all pairs
+        exp_logits = torch.exp(logits)  # [batch_size, num_classes]
+        
+        # Sum exp(logits) for denominator
+        sum_exp_logits = exp_logits.sum(dim=1)  # [batch_size]
+        
+        # Compute log(exp(pos_logits) / sum(exp(logits))) = pos_logits - log(sum(exp(logits)))
+        loss = -positive_logits + torch.log(sum_exp_logits)
         
         # Average over the batch
-        loss = nll.mean()
-        
-        return loss
+        return loss.mean()
     
     def prepare_data(self, data, batch_size,class_to_idx):
         """
@@ -74,31 +115,48 @@ class CLIPAdapterTrainer:
         return dataloader, data['paths']  # Return paths separately for reference
     
     def train_epoch(self, train_loader, text_features):
-        """Train for one epoch."""
+        """Train for one epoch with automatic mixed precision."""
         self.model.train()
         total_loss = 0
         num_batches = 0
+
+        # Debug: verificar parámetros entrenables al inicio de la época
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f"Número de parámetros entrenables: {trainable_params}")
+        params_before = {name: param.clone().detach() for name, param in self.model.named_parameters()}
         
-        for batch_features, batch_labels,_ in tqdm(train_loader, desc="Training"):
-            # Move batch to device
+        for batch_features, batch_labels, _ in tqdm(train_loader, desc="Training"):
+            # Move batch to device and normalize
             batch_features = batch_features.to(self.device)
+            batch_features = F.normalize(batch_features, dim=-1)
             batch_labels = batch_labels.to(self.device)
             
-            # Forward pass
-            _, adapted_features, text_features = self.model(batch_features, text_features)
-            
-            # Compute loss
-            loss = self.compute_loss(adapted_features, text_features, batch_labels)
-            
-            # Backward pass
+            # Forward pass with automatic mixed precision
+            with autocast():
+                adapted_features = self.model(batch_features)
+                #loss = self.compute_cross_entropy_loss(adapted_features, text_features, batch_labels)+
+                loss = self.compute_contrastive_loss(adapted_features, text_features, batch_labels)
+            # Backward pass with gradient scaling
             self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
+            self.scaler.scale(loss).backward()
+            
+            # Optimizer step with gradient scaling
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+            
+            # Debug: verificar si los parámetros cambiaron
+            if num_batches == 0:
+                print("\nCambios en parámetros después del primer batch:")
+                for name, param in self.model.named_parameters():
+                    if param.requires_grad:
+                        param_change = (param - params_before[name]).norm().item()
+                        print(f"{name}: {param_change:.6f}")
             
             total_loss += loss.item()
             num_batches += 1
         
-        return total_loss / num_batches
+        return total_loss / num_batches if num_batches > 0 else float('nan')
+    
     
     def validate(self, val_loader, text_features):
         """Validate the model."""
@@ -112,8 +170,10 @@ class CLIPAdapterTrainer:
                 batch_features = batch_features.to(self.device)
                 batch_labels = batch_labels.to(self.device)
                 
-                # Forward pass
-                similarity, _, _ = self.model(batch_features, text_features)
+                # Forward pass with autocast for consistent dtype handling
+                with autocast():
+                    adapted_features = self.model(batch_features)
+                    similarity = torch.matmul(adapted_features, text_features.T)
                 
                 # Get predictions
                 predictions = torch.argmax(similarity, dim=1)
@@ -136,7 +196,7 @@ class CLIPAdapterTrainer:
         
         checkpoint_path = os.path.join(
             self.config.output_dir,'clip_adapter',
-            f'adapter_checkpoint_{val_acc:.4f}.pt'
+            f'adapter_checkpoint.pt'
         )
         torch.save(checkpoint, checkpoint_path)
         
@@ -159,6 +219,7 @@ class CLIPAdapterTrainer:
         self.set_seed()
 
         unique_classes = sorted({class_name for _, class_name in classes_names})
+        #unique_classes.append('empty')
         class_to_idx = {class_name: idx for idx, class_name in enumerate(unique_classes)}
 
         feature_file = os.path.join(self.feature_dir, "real_data.pt")
@@ -182,21 +243,21 @@ class CLIPAdapterTrainer:
 
         templates = [self.prompt_template] if isinstance(self.prompt_template, str) else self.prompt_template
         all_text_features = []
-        
-        for template in templates:
-            prompts = [template.format(class_name) for class_name in unique_classes]
-            text_features = []
-            
-            #print(f"\nGenerating text embeddings for template: '{template}'")
-            for i in range(0, len(prompts), self.config.clip_adapter['batch_size']):
-                batch_prompts = prompts[i:i + self.config.clip_adapter['batch_size']]
-                batch_features = self.model.encode_text(batch_prompts)
-                text_features.append(batch_features)
-            
-            # Concatenate and normalize features for this template
-            template_features = torch.cat(text_features, dim=0)
-            template_features = torch.nn.functional.normalize(template_features, dim=-1)
-            all_text_features.append(template_features)
+        with torch.no_grad():
+            for template in templates:
+                prompts = [template.format(class_name) for class_name in unique_classes]
+                text_features = []
+                
+                #print(f"\nGenerating text embeddings for template: '{template}'")
+                for i in range(0, len(prompts), self.config.clip_adapter['batch_size']):
+                    batch_prompts = prompts[i:i + self.config.clip_adapter['batch_size']]
+                    batch_features = self.encode_text(batch_prompts)
+                    text_features.append(batch_features)
+                
+                # Concatenate and normalize features for this template
+                template_features = torch.cat(text_features, dim=0)
+                template_features = torch.nn.functional.normalize(template_features, dim=-1)
+                all_text_features.append(template_features)
         
         # Average text features across templates if using multiple
         if len(all_text_features) > 1:
@@ -205,6 +266,7 @@ class CLIPAdapterTrainer:
             text_features = torch.nn.functional.normalize(text_features, dim=-1)
         else:
             text_features = all_text_features[0]
+            #text_features = text_features / text_features.norm(dim=-1, keepdim=True)
         
         # Training loop
         best_val_acc = 0

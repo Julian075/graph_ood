@@ -97,10 +97,13 @@ def main():
         clip_evaluator = ClipEvaluator(classes=classes, config=config)
         clip_evaluator.evaluate()
     elif args.mode == 'train_clip_adapter':
-        clip_adapter = CLIPAdapter(config.clip_adapter['reduction_factor'], config.device, config.clip_model)
+        clip_adapter = CLIPAdapter(config.clip_adapter['reduction_factor'], config.device)
         clip_trainer = CLIPAdapterTrainer(clip_adapter, config)
         clip_trainer.train(classes_names=classes)
-
+        
+        #test
+        clip_evaluator = ClipEvaluator(classes=classes, config=config)
+        clip_evaluator.evaluate()
 
 
 if __name__ == "__main__":

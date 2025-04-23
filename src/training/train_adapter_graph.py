@@ -1,7 +1,6 @@
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
-from torch.cuda.amp import GradScaler, autocast
 import os
 from tqdm import tqdm
 import clip
@@ -15,7 +14,7 @@ class CLIPAdapterGraphTrainer:
             reduction_factor=config.clip_adapter_graph['reduction_factor'],
             seed=config.clip_adapter_graph['seed'],
             device=config.device,
-            gnn_hidden_dim= config.clip_adapter_graph['gnn_hidden_dim'],
+            gnn_hidden_dim=config.clip_adapter_graph['gnn_hidden_dim'],
             num_gnn_layers=config.clip_adapter_graph['num_gnn_layers']
         )
         self.config = config
@@ -24,22 +23,24 @@ class CLIPAdapterGraphTrainer:
         self.feature_dir = config.feature_dir
         self.prompt_template = config.prompt_template
         self.use_synthetic_data = config.use_synthetic_data
-        self.optimizer = torch.optim.Adam(
+        
+        # Initialize SGD optimizer with momentum
+        self.optimizer = torch.optim.SGD(
             self.model.parameters(),
-            lr=config.clip_adapter_graph['learning_rate']
+            lr=config.clip_adapter_graph['learning_rate'],
+            momentum=0.9,
+            weight_decay=0.01
         )
+        
         self.temperature = config.clip_adapter_graph['temperature']
         self.clip, _ = clip.load(config.clip_model, device=config.device)
         self.clip.eval()  # Set to eval mode to freeze parameters
-        
-        # Initialize gradient scaler for AMP
-        self.scaler = GradScaler()
     
     def encode_text(self, text_prompts: List[str], normalize: bool = True) -> torch.Tensor:
-        """Encode text prompts using CLIP"""
+        """Encode text prompts using CLIP with explicit precision handling"""
         with torch.no_grad():
             text_tokens = clip.tokenize(text_prompts).to(self.device)
-            text_features = self.clip.encode_text(text_tokens)
+            text_features = self.clip.encode_text(text_tokens).float()  # Ensure float32
             if normalize:
                 text_features = F.normalize(text_features, dim=-1)
         return text_features
@@ -100,57 +101,75 @@ class CLIPAdapterGraphTrainer:
         return dataloader, data['paths']
     
     def train_epoch(self, train_loader, text_features):
-        """Train for one epoch with automatic mixed precision."""
+        """Train for one epoch with explicit precision handling."""
         self.model.train()
         total_loss = 0
         num_batches = 0
         
         for batch_features, batch_labels, _ in tqdm(train_loader, desc="Training"):
-            batch_features = batch_features.to(self.device)
-            batch_features = F.normalize(batch_features, dim=-1)
+            # Move batch to device and ensure float32
+            batch_features = batch_features.to(self.device).float()
             batch_labels = batch_labels.to(self.device)
             
-            with autocast():
-                # Forward pass through adapter and GNN
-                adapted_features, gnn_features = self.model(batch_features, training=True)
-                
-                # Normalize features
-                adapted_features = F.normalize(adapted_features, dim=-1)
-                gnn_features = F.normalize(gnn_features, dim=-1)
-                
-                # Compute combined loss
-                loss = self.compute_contrastive_loss(
-                    adapted_features, gnn_features, text_features, batch_labels
-                )
+            # Normalize input features
+            batch_features = F.normalize(batch_features, dim=-1)
             
-            # Backward pass with gradient scaling
+            # Forward pass with explicit precision
+            adapted_features, gnn_features = self.model(batch_features, training=True)
+            
+            # Normalize features
+            adapted_features = F.normalize(adapted_features, dim=-1)
+            gnn_features = F.normalize(gnn_features, dim=-1)
+            
+            # Compute combined loss
+            loss = self.compute_contrastive_loss(
+                adapted_features, gnn_features, text_features, batch_labels
+            )
+            
+            # Backward pass
             self.optimizer.zero_grad()
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            loss.backward()
+            
+            # Optional gradient clipping
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            
+            self.optimizer.step()
             
             total_loss += loss.item()
             num_batches += 1
+            
+            # Debug info cada N batches
+            if num_batches % 10 == 0:
+                print(f"\nBatch {num_batches} stats:")
+                print(f"Loss: {loss.item():.4f}")
+                print(f"Adapted features - min: {adapted_features.min().item():.4f}, max: {adapted_features.max().item():.4f}")
+                if gnn_features is not None:
+                    print(f"GNN features - min: {gnn_features.min().item():.4f}, max: {gnn_features.max().item():.4f}")
         
         return total_loss / num_batches if num_batches > 0 else float('nan')
     
     def validate(self, val_loader, text_features):
-        """Validate the model using only adapted features (not GNN)."""
+        """Validate the model with explicit precision handling."""
         self.model.eval()
         correct = 0
         total = 0
         
         with torch.no_grad():
             for batch_features, batch_labels, _ in tqdm(val_loader, desc="Validating"):
-                batch_features = batch_features.to(self.device)
+                # Move batch to device and ensure float32
+                batch_features = batch_features.to(self.device).float()
                 batch_labels = batch_labels.to(self.device)
                 
-                with autocast():
-                    # Only use adapted features for validation (not GNN)
-                    adapted_features, _ = self.model(batch_features, training=False)
-                    adapted_features = F.normalize(adapted_features, dim=-1)
-                    similarity = torch.matmul(adapted_features, text_features.T)
-                    similarity = F.normalize(similarity, dim=-1)
+                # Normalize input features
+                batch_features = F.normalize(batch_features, dim=-1)
+                
+                # Forward pass
+                adapted_features, _ = self.model(batch_features, training=False)
+                adapted_features = F.normalize(adapted_features, dim=-1)
+                
+                similarity = torch.matmul(adapted_features, text_features.T)
+                similarity = F.normalize(similarity, dim=-1)
+                
                 predictions = torch.argmax(similarity, dim=1)
                 correct += (predictions == batch_labels).sum().item()
                 total += len(batch_labels)
@@ -159,25 +178,32 @@ class CLIPAdapterGraphTrainer:
         return accuracy
     
     def save_checkpoint(self, val_acc):
-        """Save model checkpoint."""
+        """Save model checkpoint with accuracy in filename."""
         checkpoint = {
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'val_acc': val_acc,
             'config': self.config
         }
+        
+        # Format accuracy for filename
+        acc_str = f"{val_acc:.2f}".replace(".", "_")
+        
         if self.use_synthetic_data:
             checkpoint_path = os.path.join(
                 self.config.output_dir, 'clip_adapter_graph',
-                f'adapter_graph_checkpoint_synthetic.pt'
+                f'adapter_graph_checkpoint_synthetic_acc_{acc_str}.pt'
             )
         else:
             checkpoint_path = os.path.join(
                 self.config.output_dir, 'clip_adapter_graph',
-                f'adapter_graph_checkpoint.pt'
+                f'adapter_graph_checkpoint_acc_{acc_str}.pt'
             )
+        
+        # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
         torch.save(checkpoint, checkpoint_path)
+        return checkpoint_path  # Return the path for reference
     
     def load_checkpoint(self, checkpoint_path):
         """Load model checkpoint."""
@@ -187,15 +213,22 @@ class CLIPAdapterGraphTrainer:
         return checkpoint['val_acc']
     
     def set_seed(self):
-        """Set seed for reproducibility."""
+        """Set seed for reproducibility with additional settings."""
         torch.manual_seed(self.seed)
         np.random.seed(self.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed(self.seed)
             torch.cuda.manual_seed_all(self.seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
     
     def train(self, classes_names):
-        """Main training loop with early stopping."""
+        """
+        Main training loop with early stopping.
+        
+        Returns:
+            tuple: (best_val_acc, checkpoint_path)
+        """
         self.set_seed()
 
         unique_classes = sorted({class_name for _, class_name in classes_names})
@@ -272,9 +305,16 @@ class CLIPAdapterGraphTrainer:
         else:
             text_features = all_text_features[0]
 
+        # Ensure text features are float32
+        text_features = text_features.float()
+        print(f"\nText features dtype: {text_features.dtype}")
+        print(f"Text features shape: {text_features.shape}")
+        print(f"Text features stats - min: {text_features.min().item():.4f}, max: {text_features.max().item():.4f}")
+
         # Training loop
         best_val_acc = 0
         patience_counter = 0
+        best_checkpoint_path = None
         
         for epoch in range(self.config.clip_adapter_graph['num_epochs']):
             print(f"\nEpoch {epoch + 1}/{self.config.clip_adapter_graph['num_epochs']}")
@@ -289,7 +329,7 @@ class CLIPAdapterGraphTrainer:
                 print(f"Validation accuracy improved from {best_val_acc:.4f} to {val_acc:.4f}")
                 best_val_acc = val_acc
                 patience_counter = 0
-                self.save_checkpoint(val_acc)
+                best_checkpoint_path = self.save_checkpoint(val_acc)
             else:
                 patience_counter += 1
                 print(f"Validation accuracy did not improve. Patience: {patience_counter}/{self.config.clip_adapter_graph['patience']}")
@@ -299,4 +339,5 @@ class CLIPAdapterGraphTrainer:
                 break
         
         print(f"\nTraining completed. Best validation accuracy: {best_val_acc:.4f}")
-        return best_val_acc 
+        print(f"Best model saved at: {best_checkpoint_path}")
+        return best_val_acc, best_checkpoint_path 

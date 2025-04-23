@@ -185,17 +185,22 @@ def main():
             clip_trainer.train(classes_names=classes)
         else:
             clip_trainer = CLIPAdapterTrainer(config)
-            clip_trainer.train(classes_names=classes)
+            best_val_acc, checkpoint_path = clip_trainer.train(classes_names=classes)
         
         # Test phase
-        clip_adapter = CLIPAdapter(config.clip_adapter['reduction_factor'],config.clip_adapter['seed'], config.device)
+        clip_adapter = CLIPAdapter(config.clip_adapter['reduction_factor'], config.clip_adapter['seed'], config.device)
         if args.OOD_test:
             clip_evaluator = ClipAdapterEvaluator(model=clip_adapter, classes=classes_ood, ood_test=True, config=config)
         else:
             clip_evaluator = ClipAdapterEvaluator(model=clip_adapter, classes=classes, ood_test=False, config=config)
-        clip_evaluator.evaluate()
-    elif args.mode == 'train_clip_adapter_graph':
         
+        # Load the best checkpoint before evaluation
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
+        clip_adapter.load_state_dict(checkpoint['model_state_dict'])
+        clip_evaluator.model = clip_adapter
+        results = clip_evaluator.evaluate()
+        print(f"\nBest validation accuracy achieved: {best_val_acc:.4f}")
+    elif args.mode == 'train_clip_adapter_graph':
         if args.hyperparameter_search:
             search_space = config.clip_adapter['search_space']
             
@@ -261,19 +266,27 @@ def main():
             clip_trainer.train(classes_names=classes)
         else:
             clip_trainer = CLIPAdapterGraphTrainer(config)
-            clip_trainer.train(classes_names=classes)
+            best_val_acc, checkpoint_path = clip_trainer.train(classes_names=classes)
         
         # Test phase
         clip_adapter_graph = CLIPAdapterGraph(
             reduction_factor=config.clip_adapter_graph['reduction_factor'],
             seed=config.clip_adapter_graph['seed'],
-            device=config.device
+            device=config.device,
+            gnn_hidden_dim=config.clip_adapter_graph['gnn_hidden_dim'],
+            num_gnn_layers=config.clip_adapter_graph['num_gnn_layers']
         )
         if args.OOD_test:
             clip_evaluator = ClipAdapterGraphEvaluator(model=clip_adapter_graph, classes=classes_ood, ood_test=True, config=config)
         else:
             clip_evaluator = ClipAdapterGraphEvaluator(model=clip_adapter_graph, classes=classes, ood_test=False, config=config)
-        clip_evaluator.evaluate()
+        
+        # Load the best checkpoint before evaluation
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
+        clip_adapter_graph.load_state_dict(checkpoint['model_state_dict'])
+        clip_evaluator.model = clip_adapter_graph
+        results = clip_evaluator.evaluate()
+        print(f"\nBest validation accuracy achieved: {best_val_acc:.4f}")
 
 
 if __name__ == "__main__":

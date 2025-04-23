@@ -92,15 +92,15 @@ class ClipAdapterGraphEvaluator:
         # Predict in batches
         with torch.no_grad():
             for batch_features, in tqdm(data_loader, desc=f"Evaluating {split_name}"):
-                batch_features = batch_features.to(self.device)
+                # Move batch to device and ensure float32
+                batch_features = batch_features.to(self.device).float()
                 batch_features = F.normalize(batch_features, dim=-1)
                 
-                with autocast():
-                    # Solo usamos las características adaptadas para evaluación
-                    adapted_features, _ = self.model(batch_features, training=False)
-                    adapted_features = F.normalize(adapted_features, dim=-1)
-                    similarity = torch.matmul(adapted_features, self.text_features.T)
-                    similarity = F.normalize(similarity, dim=-1)
+                # Forward pass with explicit precision
+                adapted_features, _ = self.model(batch_features, training=False)
+                adapted_features = F.normalize(adapted_features, dim=-1)
+                similarity = torch.matmul(adapted_features, self.text_features.T)
+                similarity = F.normalize(similarity, dim=-1)
                 
                 predictions = torch.argmax(similarity, dim=1)
                 all_predictions.append(predictions.cpu())
@@ -184,10 +184,10 @@ class ClipAdapterGraphEvaluator:
         return results
 
     def encode_text(self, text_prompts: List[str], normalize: bool = True) -> torch.Tensor:
-        """Encode text prompts using CLIP"""
+        """Encode text prompts using CLIP with explicit precision handling"""
         with torch.no_grad():
             text_tokens = clip.tokenize(text_prompts).to(self.device)
-            text_features = self.clip.encode_text(text_tokens)
+            text_features = self.clip.encode_text(text_tokens).float()  # Ensure float32
             if normalize:
                 text_features = F.normalize(text_features, dim=-1)
         return text_features

@@ -42,12 +42,15 @@ class CLIPAdapter(nn.Module):
     #@autocast()   
     def forward(self, x):
         """
-        Forward pass with automatic mixed precision
+        Forward pass with explicit precision handling
         Args:
             x: Input features [batch_size, clip_dim]
         Returns:
             adapted: Adapted features [batch_size, clip_dim]
         """
+        # Ensure input is float32
+        x = x.float()
+        
         # Store residual
         residual = x
         
@@ -59,15 +62,17 @@ class CLIPAdapter(nn.Module):
         # Skip connection
         adapted = x + residual
         
-        # Layer norm
-        #adapted = self.layer_norm(adapted)
-
-        #alpha
+        # Alpha interpolation
         adapted = self.alpha * adapted + (1 - self.alpha) * residual
-
-        #final normalization
+        
+        # Final normalization
         adapted = F.normalize(adapted, dim=-1)
         
-        
+        # Debug info
+        #if torch.isnan(adapted).any():
+        #    print("NaN detected in adapter output")
+        #    print(f"Input stats - min: {residual.min().item():.4f}, max: {residual.max().item():.4f}")
+        #    print(f"Adapter output stats - min: {x.min().item():.4f}, max: {x.max().item():.4f}")
+        #    print(f"Final output stats - min: {adapted.min().item():.4f}, max: {adapted.max().item():.4f}")
         
         return adapted 

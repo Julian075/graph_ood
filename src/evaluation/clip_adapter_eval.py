@@ -100,16 +100,16 @@ class ClipAdapterEvaluator:
         # Predict in batches
         with torch.no_grad():
             for batch_features, in tqdm(data_loader, desc=f"Evaluating {split_name}"):
-                batch_features = batch_features.to(self.device)
+                # Move batch to device and ensure float32
+                batch_features = batch_features.to(self.device).float()
                 batch_features = F.normalize(batch_features, dim=-1)
                 
-                with autocast():
-                    adapted_features = self.model(batch_features)
-                    adapted_features = F.normalize(adapted_features, dim=-1)
-                    similarity = torch.matmul(adapted_features, self.text_features.T)
-                    similarity = F.normalize(similarity, dim=-1)
-                    #similarity = similarity #* self.model.logit_scale_CLIP
-
+                # Forward pass with explicit precision
+                adapted_features = self.model(batch_features)
+                adapted_features = F.normalize(adapted_features, dim=-1)
+                similarity = torch.matmul(adapted_features, self.text_features.T)
+                similarity = F.normalize(similarity, dim=-1)
+                
                 predictions = torch.argmax(similarity, dim=1)
                 all_predictions.append(predictions.cpu())
                 all_similarities.append(similarity.cpu())
@@ -192,10 +192,10 @@ class ClipAdapterEvaluator:
         return results
 
     def encode_text(self, text_prompts: List[str], normalize: bool = True) -> torch.Tensor:
-        """Encode text prompts using CLIP"""
+        """Encode text prompts using CLIP with explicit precision handling"""
         with torch.no_grad():
             text_tokens = clip.tokenize(text_prompts).to(self.device)
-            text_features = self.clip.encode_text(text_tokens)
+            text_features = self.clip.encode_text(text_tokens).float()  # Ensure float32
             if normalize:
                 text_features = F.normalize(text_features, dim=-1)
         return text_features

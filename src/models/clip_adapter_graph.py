@@ -94,7 +94,7 @@ class CLIPAdapterGraph(nn.Module):
         
     def forward(self, x, training=True):
         """
-        Forward pass with optional GNN during training
+        Forward pass with explicit precision handling
         Args:
             x: Input features [batch_size, clip_dim]
             training: Whether in training mode (use GNN) or inference mode (adapter only)
@@ -102,42 +102,43 @@ class CLIPAdapterGraph(nn.Module):
             adapted: Adapted features [batch_size, clip_dim]
             gnn_features: GNN processed features if training=True, None otherwise
         """
+        # Ensure input is float32
+        x = x.float()
+        
         # Store original features
         original_features = x
-        #print(f"Input features stats - min: {x.min().item():.4f}, max: {x.max().item():.4f}, mean: {x.mean().item():.4f}")
+        
         # Adapter forward pass
         x = self.down_proj(x)
-        #print(f"After down_proj - min: {x.min().item():.4f}, max: {x.max().item():.4f}, mean: {x.mean().item():.4f}")
-        
         x = self.non_linear(x)
-        #print(f"After non_linear - min: {x.min().item():.4f}, max: {x.max().item():.4f}, mean: {x.mean().item():.4f}")
-        
         x = self.up_proj(x)
-        #print(f"After up_proj - min: {x.min().item():.4f}, max: {x.max().item():.4f}, mean: {x.mean().item():.4f}")
         
         # Skip connection and normalization
         adapted = x + original_features
-        #print(f"After skip connection - min: {adapted.min().item():.4f}, max: {adapted.max().item():.4f}, mean: {adapted.mean().item():.4f}")
-        
         adapted = self.alpha * adapted + (1 - self.alpha) * original_features
-        #print(f"After alpha interpolation - min: {adapted.min().item():.4f}, max: {adapted.max().item():.4f}, mean: {adapted.mean().item():.4f}")
-        
         adapted = F.normalize(adapted, dim=-1)
-        #print(f"After normalization - min: {adapted.min().item():.4f}, max: {adapted.max().item():.4f}, mean: {adapted.mean().item():.4f}")
         
         if training:
             # Create graph from adapted features
             edge_index, edge_weight = self.create_adjacency_matrix(adapted)
-            #print(f"Edge weights stats - min: {edge_weight.min().item():.4f}, max: {edge_weight.max().item():.4f}, mean: {edge_weight.mean().item():.4f}")
             
             # GNN forward pass
             x_graph = adapted
             for i, gnn_layer in enumerate(self.gnn_layers):
+                # Apply GNN layer
                 x_graph = gnn_layer(x_graph, edge_index, edge_weight)
+                # Apply layer norm
                 x_graph = self.layer_norms[i](x_graph)
+                # Apply non-linearity
                 x_graph = F.relu(x_graph)
+                # Normalize
                 x_graph = F.normalize(x_graph, dim=-1)
-                #print(f"After GNN layer {i} - min: {x_graph.min().item():.4f}, max: {x_graph.max().item():.4f}, mean: {x_graph.mean().item():.4f}")
+                
+                # Debug info
+                #if torch.isnan(x_graph).any():
+                #    print(f"NaN detected in GNN layer {i}")
+                #    print(f"Edge weights stats - min: {edge_weight.min().item():.4f}, max: {edge_weight.max().item():.4f}")
+                #    print(f"Layer output stats - min: {x_graph.min().item():.4f}, max: {x_graph.max().item():.4f}")
             
             return adapted, x_graph
         

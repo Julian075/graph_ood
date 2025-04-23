@@ -2,7 +2,7 @@
 #SBATCH --job-name=clip_adapter_train        # Name of your job
 #SBATCH --output=./logs/%x_%j.out           # Output file (%x for job name, %j for job ID)
 #SBATCH --error=./logs/%x_%j.err            # Error file
-#SBATCH --partition=P100                      # Select a partition to submit
+#SBATCH --partition=L40S                      # Select a partition to submit
 #SBATCH --gres=gpu:1                        # Request 1 GPU
 #SBATCH --cpus-per-task=8                   # Request 8 CPU cores
 #SBATCH --mem=32G                           # Request 32 GB of memory
@@ -35,7 +35,7 @@ python main.py \
     --feature_dir ${FEATURE_DIR} \
     --feature_dir_ood ${FEATURE_DIR_OOD} \
     --class_mapping ${CLASS_MAPPING} \
-    --use_synthetic_data False \
+    --use_synthetic_data True \
     --prompt_template "a photo of a {}" \
     --OOD_test True \
 

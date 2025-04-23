@@ -15,24 +15,31 @@ class CLIPAdapter(nn.Module):
         # Calculate bottleneck dimension
         self.bottleneck_dim = self.clip_dim // reduction_factor
         
+        #parameter
+        self.alpha = nn.Parameter(torch.tensor(0.5)) 
         # Adapter layers (trainable)
         self.down_proj = nn.Linear(self.clip_dim, self.bottleneck_dim)
         self.non_linear = nn.ReLU()
         self.up_proj = nn.Linear(self.bottleneck_dim, self.clip_dim)
-        self.layer_norm = nn.LayerNorm(self.clip_dim)
+        #self.layer_norm = nn.LayerNorm(self.clip_dim)
+        #self.logit_scale_CLIP = torch.nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
  
         # Move model to device
         self.to(device)
         self.seed = seed
+        self.set_seed(seed)
 
-    
-    @autocast()
+
     def set_seed(self, seed):
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
         np.random.seed(seed)
-        
+        #torch.backends.cudnn.deterministic = True
+        #torch.backends.cudnn.benchmark = False
+    
+    #@autocast()   
     def forward(self, x):
         """
         Forward pass with automatic mixed precision
@@ -52,8 +59,15 @@ class CLIPAdapter(nn.Module):
         # Skip connection
         adapted = x + residual
         
-        # Layer norm and final normalization
-        adapted = self.layer_norm(adapted)
+        # Layer norm
+        #adapted = self.layer_norm(adapted)
+
+        #alpha
+        adapted = self.alpha * adapted + (1 - self.alpha) * residual
+
+        #final normalization
         adapted = F.normalize(adapted, dim=-1)
+        
+        
         
         return adapted 

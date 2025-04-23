@@ -7,13 +7,13 @@ from tqdm import tqdm
 import os
 from typing import List, Dict, Optional
 
-
-class ClipAdapterEvaluator:
+class ClipAdapterGraphEvaluator:
     def __init__(self, model, classes: List[str], ood_test: bool, config):
         """
-        Initialize the evaluator.
+        Initialize the evaluator for the graph-enhanced adapter.
         
         Args:
+            model: The CLIPAdapterGraph model
             classes: List of class names
             ood_test: Whether to evaluate on OOD test set
             config: Configuration object containing model settings
@@ -31,33 +31,24 @@ class ClipAdapterEvaluator:
         
         # Load adapter model from checkpoint
         if config.use_synthetic_data:
-            checkpoint_path = os.path.join(config.output_dir, 'clip_adapter', 'adapter_checkpoint_synthetic.pt')
+            checkpoint_path = os.path.join(config.output_dir, 'clip_adapter_graph', 'adapter_graph_checkpoint_synthetic.pt')
         else:
-            checkpoint_path = os.path.join(config.output_dir, 'clip_adapter', 'adapter_checkpoint.pt')
+            checkpoint_path = os.path.join(config.output_dir, 'clip_adapter_graph', 'adapter_graph_checkpoint.pt')
+        
         checkpoint = torch.load(checkpoint_path, weights_only=False)
         self.model = model
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.to(self.device)
         self.model.eval()
-        self.model.to(self.device)
-        self.model.eval()
         
-        # Get text features for classes (cache them since they don't change)
+        # Get text features for classes
         self.text_features = self.get_text_features()
 
     def get_missing_classes(self, test_labels: List[str]) -> List[str]:
-        """
-        Find classes in test set that are not in training classes.
-        
-        Args:
-            test_labels: List of test set labels
-            
-        Returns:
-            List of class names that appear in test but not in training
-        """
+        """Find classes in test set that weren't in training"""
         test_classes = set(test_labels)
         train_classes = set(self.classes)
-        return sorted(list(test_classes - train_classes))
+        return list(test_classes - train_classes)
 
     def evaluate_test_set(self, test_features: torch.Tensor, test_labels: List[str], split_name: str) -> Dict[str, float]:
         """
@@ -90,8 +81,9 @@ class ClipAdapterEvaluator:
         dataset = TensorDataset(test_features)
         data_loader = DataLoader(
             dataset, 
-            batch_size=self.config.clip_adapter['batch_size'],
-            shuffle=False
+            batch_size=self.config.clip_adapter_graph['batch_size'],
+            shuffle=False,
+            pin_memory=True
         )
         
         all_predictions = []
@@ -104,12 +96,12 @@ class ClipAdapterEvaluator:
                 batch_features = F.normalize(batch_features, dim=-1)
                 
                 with autocast():
-                    adapted_features = self.model(batch_features)
+                    # Solo usamos las características adaptadas para evaluación
+                    adapted_features, _ = self.model(batch_features, training=False)
                     adapted_features = F.normalize(adapted_features, dim=-1)
                     similarity = torch.matmul(adapted_features, self.text_features.T)
                     similarity = F.normalize(similarity, dim=-1)
-                    #similarity = similarity #* self.model.logit_scale_CLIP
-
+                
                 predictions = torch.argmax(similarity, dim=1)
                 all_predictions.append(predictions.cpu())
                 all_similarities.append(similarity.cpu())
@@ -150,7 +142,7 @@ class ClipAdapterEvaluator:
             'similarities': similarities,
             'all_classes': all_classes
         }
-        
+
     def evaluate(self) -> Dict[str, Dict[str, float]]:
         """
         Evaluate model on all test splits.
@@ -201,15 +193,7 @@ class ClipAdapterEvaluator:
         return text_features
     
     def get_text_features(self, class_names: Optional[List[str]] = None) -> torch.Tensor:
-        """
-        Get text features for specified classes or self.classes if none specified.
-        
-        Args:
-            class_names: Optional list of class names to get features for
-            
-        Returns:
-            text_features: Normalized text features [num_classes, feature_dim]
-        """
+        """Get text features for specified classes or self.classes if none specified."""
         if class_names is None:
             class_names = self.classes
             

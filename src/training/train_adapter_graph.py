@@ -6,28 +6,34 @@ import os
 from tqdm import tqdm
 import clip
 from typing import List
-from src.models.clip_adapter import CLIPAdapter
+from src.models.clip_adapter_graph import CLIPAdapterGraph
 import numpy as np
-class CLIPAdapterTrainer:
+
+class CLIPAdapterGraphTrainer:
     def __init__(self, config):
-        self.model = CLIPAdapter(config.clip_adapter['reduction_factor'],config.clip_adapter['seed'], config.device) #model.to(config.device)
+        self.model = CLIPAdapterGraph(
+            reduction_factor=config.clip_adapter_graph['reduction_factor'],
+            seed=config.clip_adapter_graph['seed'],
+            device=config.device,
+            gnn_hidden_dim= config.clip_adapter_graph['gnn_hidden_dim'],
+            num_gnn_layers=config.clip_adapter_graph['num_gnn_layers']
+        )
         self.config = config
         self.device = config.device
-        self.seed = config.clip_adapter['seed']
+        self.seed = config.clip_adapter_graph['seed']
         self.feature_dir = config.feature_dir
         self.prompt_template = config.prompt_template
         self.use_synthetic_data = config.use_synthetic_data
         self.optimizer = torch.optim.Adam(
             self.model.parameters(),
-            lr=config.clip_adapter['learning_rate']
+            lr=config.clip_adapter_graph['learning_rate']
         )
-        self.temperature = config.clip_adapter['temperature']
+        self.temperature = config.clip_adapter_graph['temperature']
         self.clip, _ = clip.load(config.clip_model, device=config.device)
         self.clip.eval()  # Set to eval mode to freeze parameters
         
         # Initialize gradient scaler for AMP
         self.scaler = GradScaler()
-
     
     def encode_text(self, text_prompts: List[str], normalize: bool = True) -> torch.Tensor:
         """Encode text prompts using CLIP"""
@@ -35,85 +41,54 @@ class CLIPAdapterTrainer:
             text_tokens = clip.tokenize(text_prompts).to(self.device)
             text_features = self.clip.encode_text(text_tokens)
             if normalize:
-                text_features = torch.nn.functional.normalize(text_features, dim=-1)
+                text_features = F.normalize(text_features, dim=-1)
         return text_features
-        
-    def compute_cross_entropy_loss(self, image_features, text_features, labels):
-        """
-        Compute standard cross entropy loss between image and text features.
-        
-        Args:
-            image_features: Tensor of shape [batch_size, feature_dim]
-            text_features: Tensor of shape [num_classes, feature_dim]
-            labels: Tensor of shape [batch_size] containing class indices
-        """
-        # Compute similarity scores
-        logits = torch.matmul(image_features, text_features.T)/self.temperature
-        
-        # Apply temperature scaling
-       # logits = logits * self.model.logit_scale_CLIP
-        
-        # Use standard cross entropy loss
-        loss = F.cross_entropy(logits, labels)
-        return loss
     
-    def compute_contrastive_loss(self, image_features, text_features, labels):
+    def compute_contrastive_loss(self, image_features, gnn_features, text_features, labels):
         """
-   
+        Compute contrastive loss for both adapter and GNN features
+        
         Args:
-            image_features: Tensor of shape [batch_size, feature_dim]
-            text_features: Tensor of shape [num_classes, feature_dim]
-            labels: Tensor of shape [batch_size] containing class indices
+            image_features: Adapted features [batch_size, clip_dim]
+            gnn_features: GNN processed features [batch_size, clip_dim]
+            text_features: Text features [num_classes, clip_dim]
+            labels: Class indices [batch_size]
         """
-        # Compute similarity matrix
-        logits = torch.matmul(image_features, text_features.T) #* self.model.logit_scale_CLIP)  # [batch_size, num_classes]
-        logits= F.normalize(logits, dim=-1)
-        # Scale logits by temperature
-        logits = logits / self.temperature
+        # Compute adapter loss
+        adapter_logits = torch.matmul(image_features, text_features.T) / self.temperature
+        adapter_loss = self.compute_single_contrastive_loss(adapter_logits, labels)
         
-        # Get positive pair logits using the labels
-        positive_logits = logits[torch.arange(logits.size(0)), labels]  # [batch_size]
+        # Compute GNN loss
+        gnn_logits = torch.matmul(gnn_features, text_features.T) / self.temperature
+        gnn_loss = self.compute_single_contrastive_loss(gnn_logits, labels)
         
-        # Compute exp(logits) for all pairs
-        exp_logits = torch.exp(logits)  # [batch_size, num_classes]
-        
-        # Sum exp(logits) for denominator
-        sum_exp_logits = exp_logits.sum(dim=1)  # [batch_size]
-        
-        # Compute log(exp(pos_logits) / sum(exp(logits))) = pos_logits - log(sum(exp(logits)))
+        # Total loss is the sum of both losses
+        total_loss = adapter_loss + gnn_loss
+        return total_loss
+    
+    def compute_single_contrastive_loss(self, logits, labels):
+        """Helper function to compute contrastive loss for a single set of logits"""
+        logits = F.normalize(logits, dim=-1)
+        positive_logits = logits[torch.arange(logits.size(0)), labels]
+        exp_logits = torch.exp(logits)
+        sum_exp_logits = exp_logits.sum(dim=1)
         loss = -positive_logits + torch.log(sum_exp_logits)
-        
-        # Average over the batch
         return loss.mean()
     
     def prepare_data(self, data, batch_size, class_to_idx):
-        """
-        Prepare data loaders for training/validation.
-        
-        Args:
-            data: Dictionary containing:
-                - features: Tensor of shape [N, feature_dim]
-                - labels: List or Tensor of labels
-                - paths: List of image paths
-            batch_size: Batch size for the dataloader
-            class_to_idx: Dictionary mapping class names to indices
-        """
-        # Convert labels to indices if they're not already
+        """Prepare data loaders for training/validation."""
         labels = data['labels']
         if isinstance(labels, list):
-            # Convert labels to indices
             label_indices = [class_to_idx[str(label) if isinstance(label, tuple) else label] for label in labels]
             labels = torch.tensor(label_indices)
         elif isinstance(labels, torch.Tensor) and labels.dtype != torch.int64:
-            # If tensor but not indices, convert to indices
             label_indices = [class_to_idx[str(label.item())] for label in labels]
             labels = torch.tensor(label_indices)
             
-        # Create dataset with features and labels
         dataset = TensorDataset(
             data['features'],
             labels,
-            torch.arange(len(data['paths']))  # Create indices for paths lookup
+            torch.arange(len(data['paths']))
         )
         
         dataloader = DataLoader(
@@ -122,77 +97,61 @@ class CLIPAdapterTrainer:
             shuffle=True,
             pin_memory=True
         )
-        return dataloader, data['paths']  # Return paths separately for reference
+        return dataloader, data['paths']
     
     def train_epoch(self, train_loader, text_features):
         """Train for one epoch with automatic mixed precision."""
         self.model.train()
         total_loss = 0
         num_batches = 0
-
-        # Debug: verificar parámetros entrenables al inicio de la época
-        #trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        #print(f"Número de parámetros entrenables: {trainable_params}")
-        #params_before = {name: param.clone().detach() for name, param in self.model.named_parameters()}
         
         for batch_features, batch_labels, _ in tqdm(train_loader, desc="Training"):
-            # Move batch to device and normalize
             batch_features = batch_features.to(self.device)
             batch_features = F.normalize(batch_features, dim=-1)
             batch_labels = batch_labels.to(self.device)
             
-            # Forward pass with automatic mixed precision
             with autocast():
-                adapted_features = self.model(batch_features)
+                # Forward pass through adapter and GNN
+                adapted_features, gnn_features = self.model(batch_features, training=True)
+                
+                # Normalize features
                 adapted_features = F.normalize(adapted_features, dim=-1)
-                #loss = self.compute_cross_entropy_loss(adapted_features, text_features, batch_labels)+
-                loss = self.compute_contrastive_loss(adapted_features, text_features, batch_labels)
+                gnn_features = F.normalize(gnn_features, dim=-1)
+                
+                # Compute combined loss
+                loss = self.compute_contrastive_loss(
+                    adapted_features, gnn_features, text_features, batch_labels
+                )
+            
             # Backward pass with gradient scaling
             self.optimizer.zero_grad()
             self.scaler.scale(loss).backward()
-            
-            # Optimizer step with gradient scaling
             self.scaler.step(self.optimizer)
             self.scaler.update()
             
-            # Debug: verificar si los parámetros cambiaron
-            #if num_batches == 0:
-            #    print("\nCambios en parámetros después del primer batch:")
-            #    for name, param in self.model.named_parameters():
-            #        if param.requires_grad:
-            #            param_change = (param - params_before[name]).norm().item()
-            #            print(f"{name}: {param_change:.6f}")
-            #
             total_loss += loss.item()
             num_batches += 1
         
         return total_loss / num_batches if num_batches > 0 else float('nan')
     
-    
     def validate(self, val_loader, text_features):
-        """Validate the model."""
+        """Validate the model using only adapted features (not GNN)."""
         self.model.eval()
         correct = 0
         total = 0
         
         with torch.no_grad():
-            for batch_features, batch_labels,_ in tqdm(val_loader, desc="Validating"):
-                # Move batch to device
+            for batch_features, batch_labels, _ in tqdm(val_loader, desc="Validating"):
                 batch_features = batch_features.to(self.device)
                 batch_labels = batch_labels.to(self.device)
                 
-                # Forward pass with autocast for consistent dtype handling
                 with autocast():
-                    adapted_features = self.model(batch_features)
+                    # Only use adapted features for validation (not GNN)
+                    adapted_features, _ = self.model(batch_features, training=False)
                     adapted_features = F.normalize(adapted_features, dim=-1)
                     similarity = torch.matmul(adapted_features, text_features.T)
-                    similarity= F.normalize(similarity, dim=-1)
-                    #similarity = similarity * self.model.logit_scale_CLIP   
-                
-                # Get predictions
+                    similarity = F.normalize(similarity, dim=-1)
                 predictions = torch.argmax(similarity, dim=1)
-                
-                # Update metrics
                 correct += (predictions == batch_labels).sum().item()
                 total += len(batch_labels)
         
@@ -209,16 +168,17 @@ class CLIPAdapterTrainer:
         }
         if self.use_synthetic_data:
             checkpoint_path = os.path.join(
-                self.config.output_dir,'clip_adapter',
-                f'adapter_checkpoint_synthetic.pt'
+                self.config.output_dir, 'clip_adapter_graph',
+                f'adapter_graph_checkpoint_synthetic.pt'
             )
         else:
             checkpoint_path = os.path.join(
-                self.config.output_dir,'clip_adapter',
-                f'adapter_checkpoint.pt'
+                self.config.output_dir, 'clip_adapter_graph',
+                f'adapter_graph_checkpoint.pt'
             )
+        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
         torch.save(checkpoint, checkpoint_path)
-        
+    
     def load_checkpoint(self, checkpoint_path):
         """Load model checkpoint."""
         checkpoint = torch.load(checkpoint_path, weights_only=False)
@@ -226,36 +186,35 @@ class CLIPAdapterTrainer:
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         return checkpoint['val_acc']
     
-    def set_seed(self, seed):
-        torch.manual_seed(seed)
+    def set_seed(self):
+        """Set seed for reproducibility."""
+        torch.manual_seed(self.seed)
+        np.random.seed(self.seed)
         if torch.cuda.is_available():
-            torch.cuda.manual_seed(seed)
-            torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
-        np.random.seed(seed)
-        #torch.backends.cudnn.deterministic = True
-        #torch.backends.cudnn.benchmark = False
+            torch.cuda.manual_seed(self.seed)
+            torch.cuda.manual_seed_all(self.seed)
     
     def train(self, classes_names):
         """Main training loop with early stopping."""
-        # Load features from the feature directory
-        self.set_seed(self.seed)
+        self.set_seed()
 
         unique_classes = sorted({class_name for _, class_name in classes_names})
-        #unique_classes.append('empty')
         class_to_idx = {class_name: idx for idx, class_name in enumerate(unique_classes)}
 
+        # Load features
         feature_file = os.path.join(self.feature_dir, "real_data.pt")
         if not os.path.exists(feature_file):
             raise FileNotFoundError(f"Feature file not found at {feature_file}")
+        
         all_data = torch.load(feature_file)
         if self.use_synthetic_data:
             feature_file_synthetic = os.path.join(self.feature_dir, "synthetic_features.pt")
             if not os.path.exists(feature_file_synthetic):
                 raise FileNotFoundError(f"Feature file not found at {feature_file_synthetic}")
+            
             all_data_synthetic = torch.load(feature_file_synthetic)
             all_data['train']['features'] = torch.cat([all_data['train']['features'], all_data_synthetic['features']])
             
-            # Convert labels to indices first, then to tensors
             if isinstance(all_data['train']['labels'], list):
                 train_label_indices = [class_to_idx[str(label) if isinstance(label, tuple) else label] for label in all_data['train']['labels']]
                 all_data['train']['labels'] = torch.tensor(train_label_indices)
@@ -266,7 +225,6 @@ class CLIPAdapterTrainer:
             
             all_data['train']['labels'] = torch.cat([all_data['train']['labels'], all_data_synthetic['labels']])
             all_data['train']['paths'] = all_data['train']['paths'] + all_data_synthetic['paths']
-            
 
         # Get train and val splits
         train_features = all_data['train']['features']
@@ -279,52 +237,54 @@ class CLIPAdapterTrainer:
         print(f"Validation samples: {len(val_features)}")
         
         # Prepare data loaders
-        train_loader, train_paths = self.prepare_data({'features': train_features, 'labels': train_labels, 'paths': all_data['train']['paths']}, self.config.clip_adapter['batch_size'],class_to_idx)
-        val_loader, val_paths = self.prepare_data({'features': val_features, 'labels': val_labels, 'paths': all_data['val']['paths']}, self.config.clip_adapter['batch_size'],class_to_idx)
+        train_loader, _ = self.prepare_data(
+            {'features': train_features, 'labels': train_labels, 'paths': all_data['train']['paths']},
+            self.config.clip_adapter_graph['batch_size'],
+            class_to_idx
+        )
+        val_loader, _ = self.prepare_data(
+            {'features': val_features, 'labels': val_labels, 'paths': all_data['val']['paths']},
+            self.config.clip_adapter_graph['batch_size'],
+            class_to_idx
+        )
 
+        # Prepare text features
         templates = [self.prompt_template] if isinstance(self.prompt_template, str) else self.prompt_template
         all_text_features = []
+        
         with torch.no_grad():
             for template in templates:
                 prompts = [template.format(class_name) for class_name in unique_classes]
                 text_features = []
                 
-                #print(f"\nGenerating text embeddings for template: '{template}'")
-                for i in range(0, len(prompts), self.config.clip_adapter['batch_size']):
-                    batch_prompts = prompts[i:i + self.config.clip_adapter['batch_size']]
+                for i in range(0, len(prompts), self.config.clip_adapter_graph['batch_size']):
+                    batch_prompts = prompts[i:i + self.config.clip_adapter_graph['batch_size']]
                     batch_features = self.encode_text(batch_prompts)
                     text_features.append(batch_features)
                 
-                # Concatenate and normalize features for this template
                 template_features = torch.cat(text_features, dim=0)
                 template_features = F.normalize(template_features, dim=-1)
                 all_text_features.append(template_features)
         
-        # Average text features across templates if using multiple
         if len(all_text_features) > 1:
             text_features = torch.stack(all_text_features).mean(dim=0)
-            # Re-normalize after averaging
             text_features = F.normalize(text_features, dim=-1)
         else:
             text_features = all_text_features[0]
-            #text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-        
+
         # Training loop
         best_val_acc = 0
         patience_counter = 0
         
-        for epoch in range(self.config.clip_adapter['num_epochs']):
-            print(f"\nEpoch {epoch + 1}/{self.config.clip_adapter['num_epochs']}")
+        for epoch in range(self.config.clip_adapter_graph['num_epochs']):
+            print(f"\nEpoch {epoch + 1}/{self.config.clip_adapter_graph['num_epochs']}")
             
-            # Train epoch
             train_loss = self.train_epoch(train_loader, text_features)
             print(f"Training loss: {train_loss:.4f}")
             
-            # Validate
             val_acc = self.validate(val_loader, text_features)
             print(f"Validation accuracy: {val_acc:.4f}")
             
-            # Early stopping
             if val_acc > best_val_acc:
                 print(f"Validation accuracy improved from {best_val_acc:.4f} to {val_acc:.4f}")
                 best_val_acc = val_acc
@@ -332,12 +292,11 @@ class CLIPAdapterTrainer:
                 self.save_checkpoint(val_acc)
             else:
                 patience_counter += 1
-                
-                print(f"Validation accuracy did not improve. Patience: {patience_counter}/{self.config.clip_adapter['patience']}")
+                print(f"Validation accuracy did not improve. Patience: {patience_counter}/{self.config.clip_adapter_graph['patience']}")
             
-            if patience_counter >= self.config.clip_adapter['patience']:
+            if patience_counter >= self.config.clip_adapter_graph['patience']:
                 print("\nEarly stopping triggered!")
                 break
         
         print(f"\nTraining completed. Best validation accuracy: {best_val_acc:.4f}")
-        return best_val_acc
+        return best_val_acc 

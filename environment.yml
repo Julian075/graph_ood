@@ -2,24 +2,30 @@ name: synthetic_domain
 channels:
   - pytorch
   - nvidia
+  - pyg
   - conda-forge
   - defaults
 dependencies:
   - python=3.10
-  - pytorch
+  - pytorch=2.0.1
   - torchvision
   - pytorch-cuda=11.8
+  - pyg=2.4.0
   - pip
   - pip:
+    - torch-geometric==2.3.1
+    - torch-scatter==2.1.1
+    - torch-sparse==0.6.17
+    - torch-cluster==1.6.1
     - diffusers==0.19.3
     - transformers==4.31.0
     - accelerate==0.21.0
     - safetensors==0.3.1
-    - tqdm
-    - pillow
+    - tqdm>=4.65.0
+    - pillow>=10.0.0
     - huggingface-hub==0.15.1
-    - numpy
-    - scipy
-    - ftfy
-    - regex
+    - numpy>=1.24.0
+    - scipy>=1.10.0
+    - ftfy>=6.1.1
+    - regex>=2023.6.3
     - clip @ git+https://github.com/openai/CLIP.git@main 

@@ -3,6 +3,7 @@ import torch
 import argparse
 import copy
 from src.generation.synthetic_data import generate_synthetic_data
+from src.generation.synthetic_data_with_attention import generate_synthetic_data_with_attention
 from src.utils.utils import get_classes_from_folder
 from src.feature_extraction.feature_extractor import FeatureExtractor
 from src.evaluation.clip_test import ClipEvaluator
@@ -55,6 +56,9 @@ def parse_args():
     parser.add_argument('--hyperparameter_search', type=str, default='False',
                       choices=['True', 'False'],
                       help='Hyperparameter search (True/False)')
+    parser.add_argument('--use_attention', type=str, default='False',
+                      choices=['True', 'False'],
+                      help='Use attention maps for segmentation (True/False)')
     
     args = parser.parse_args()
     
@@ -62,6 +66,7 @@ def parse_args():
     args.use_synthetic_data = args.use_synthetic_data.lower() == 'true'
     args.OOD_test = args.OOD_test.lower() == 'true'
     args.hyperparameter_search = args.hyperparameter_search.lower() == 'true'
+    args.use_attention = args.use_attention.lower() == 'true'
     
     return args
 
@@ -86,6 +91,7 @@ def main():
         print("\nConfiguration:")
         print(f"  images_per_class: {args.images_per_class}")
         print(f"  prompt_template: {args.prompt_template}")
+        print(f"  use_attention: {args.use_attention}")
         if args.start_idx is not None:
             print(f"  start_idx: {args.start_idx}")
         if args.end_idx is not None:
@@ -93,15 +99,28 @@ def main():
         
         # Generate synthetic data
         print("\nGenerating synthetic images...")
-        generate_synthetic_data(
-            output_folder=args.synthetic_dir,
-            classes=classes,
-            images_per_class=args.images_per_class,
-            prompt_template=args.prompt_template,
-            seed=args.seed,
-            start_idx=args.start_idx,
-            end_idx=args.end_idx
-        )
+        
+        if args.use_attention:
+            print("Using attention maps for segmentation")
+            generate_synthetic_data_with_attention(
+                output_folder=args.synthetic_dir,
+                classes=classes,
+                images_per_class=args.images_per_class,
+                prompt_template=args.prompt_template,
+                seed=args.seed,
+                start_idx=args.start_idx,
+                end_idx=args.end_idx
+            )
+        else:
+            generate_synthetic_data(
+                output_folder=args.synthetic_dir,
+                classes=classes,
+                images_per_class=args.images_per_class,
+                prompt_template=args.prompt_template,
+                seed=args.seed,
+                start_idx=args.start_idx,
+                end_idx=args.end_idx
+            )
         print("\nSynthetic data generation completed!")
     elif args.mode == 'extract':
         features={}

@@ -22,7 +22,7 @@ echo "Current env: $CONDA_DEFAULT_ENV"
 python main.py \
     --mode generate \
     --input_dir ./data/real_data/serengeti \
-    --synthetic_dir ./data/synthetic_data/serengeti \
+    --synthetic_dir ./data/synthetic_data_segmented/serengeti \
     --class_mapping ./data/real_data/serengeti/class_mapping.json \
     --images_per_class 100 \
     --prompt_template "a photo of a {}" \

@@ -5,20 +5,40 @@ import numpy as np
 from PIL import Image
 from diffusers import DiffusionPipeline
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
+from typing import List, Union
 
 def generate_synthetic_data_seg(
-    output_folder,
-    classes,
-    images_per_class,
-    prompt_template="a photo of a {}",
-    seed=None,
-    start_idx=None,
-    end_idx=None
+    output_folder: str,
+    classes: list,
+    images_per_class: int,
+    prompt_templates: Union[str, List[str]] = ["a photo of a {}"],
+    seed: int = None,
+    start_idx: int = None,
+    end_idx: int = None
 ):
-    """Generate synthetic images for each class using Stable Diffusion and crop them using Grounding DINO via Hugging Face."""
+    """Generate synthetic images for each class using Stable Diffusion and crop them using Grounding DINO via Hugging Face.
     
+    Args:
+        output_folder: Directory to save generated images
+        classes: List of (folder_name, class_name) tuples
+        images_per_class: Number of images to generate per class
+        prompt_templates: Single template string or list of template strings (e.g. ["a photo of a {}", "an image of a {}"]).
+                        One will be randomly chosen for each image.
+        seed: Random seed for reproducibility
+        start_idx: Start index in classes list
+        end_idx: End index in classes list
+    """
+    random.seed(seed)
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is not available. Please check your GPU installation.")
+
+    # Convert single template to list for uniform processing
+    if isinstance(prompt_templates, str):
+        prompt_templates = [prompt_templates]
+    
+    print(f"Using {len(prompt_templates)} different prompt templates:")
+    for template in prompt_templates:
+        print(f"  - {template}")
 
     # Initialize Stable Diffusion XL
     pipe = DiffusionPipeline.from_pretrained(
@@ -68,7 +88,10 @@ def generate_synthetic_data_seg(
         attempts = 0
         while successful_images < images_per_class and attempts < images_per_class * 2:
             attempts += 1
-            prompt = prompt_template.format(class_name)
+            # Randomly select a prompt template for each generation
+            template = random.choice(prompt_templates)
+            prompt = template.format(class_name)
+            
             if successful_images == 0:
                 print(f"Example prompt: {prompt}")
             try:
@@ -100,7 +123,7 @@ def generate_synthetic_data_seg(
                     successful_images += 1
                     save_path = os.path.join(class_dir, f"{folder_name}_{successful_images}.jpg")
                     cropped_image.convert("RGB").save(save_path, "JPEG", quality=95)
-                    print(f"Saved {successful_images}/{images_per_class} for {class_name}")
+                    print(f"Saved {successful_images}/{images_per_class} for {class_name} using template: {template}")
                 else:
                     print(f"No object detected for {class_name}, attempt {attempts}")
             except Exception as e:

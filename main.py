@@ -2,6 +2,7 @@ import os
 import torch
 import argparse
 import copy
+import json
 from src.generation.synthetic_data import generate_synthetic_data
 from src.generation.synthetic_data_seg import generate_synthetic_data_seg
 from src.utils.utils import get_classes_from_folder, set_global_seed
@@ -46,7 +47,7 @@ def parse_args():
     parser.add_argument('--images_per_class', type=int, default=100,
                       help='Number of synthetic images to generate per class')
     parser.add_argument('--prompt_template', type=str, default="a photo of a {}",
-                      help='Template for generating prompts')
+                        help="Single prompt template or path to JSON file with list of templates")
     parser.add_argument('--start_idx', type=int, default=None,
                       help='Starting index for generation')
     parser.add_argument('--end_idx', type=int, default=None,
@@ -77,7 +78,12 @@ def main():
     set_global_seed(args.seed)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    config = Config(args.feature_dir, args.feature_dir_ood, args.class_mapping, args.prompt_template, args.use_synthetic_data, args.seed, device)
+    if args.prompt_template.endswith('.json'):
+        with open(args.prompt_template, 'r') as f:
+            prompt_templates = json.load(f)
+    else:
+        prompt_templates = args.prompt_template
+    config = Config(args.feature_dir, args.feature_dir_ood, args.class_mapping, prompt_templates, args.use_synthetic_data, args.seed, device)
     # Get classes from training directory
     print("\nGetting classes from training directory...")
     train_folder = os.path.join(args.input_dir, "train")
@@ -104,13 +110,14 @@ def main():
         # Generate synthetic data
         print("\nGenerating synthetic images...")
         
+        
         if args.use_attention:
             print("Using attention maps for segmentation")
             generate_synthetic_data_seg(
                 output_folder=args.synthetic_dir,
                 classes=classes,
                 images_per_class=args.images_per_class,
-                prompt_template=args.prompt_template,
+                prompt_templates=prompt_templates,
                 seed=args.seed,
                 start_idx=args.start_idx,
                 end_idx=args.end_idx

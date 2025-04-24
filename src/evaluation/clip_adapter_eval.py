@@ -1,7 +1,6 @@
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
-from torch.cuda.amp import autocast
 import clip
 from tqdm import tqdm
 import os

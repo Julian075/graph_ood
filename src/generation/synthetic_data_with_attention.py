@@ -7,53 +7,45 @@ from tqdm import tqdm
 import random
 import json
 import numpy as np
-from typing import Optional
+from groundingdino.util.inference import load_model, load_image, predict
+from groundingdino.util.inference import box_convert
+import pkg_resources
 
-class CustomAttnProcessor:
-    def __init__(self, attention_maps):
-        self.attention_maps = attention_maps
+def get_groundingdino_paths():
+    """Get the paths for GroundingDINO config and weights from the installed package."""
+    package_path = pkg_resources.resource_filename('groundingdino', '')
+    config_path = os.path.join(package_path, 'config/GroundingDINO_SwinT_OGC.py')
+    weights_path = os.path.join(package_path, 'weights/groundingdino_swint_ogc.pth')
+    return config_path, weights_path
 
-    def __call__(self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None):
-        batch_size, sequence_length, _ = hidden_states.shape
-        attention_probs = attn.get_attention_scores(hidden_states, encoder_hidden_states, attention_mask)
-        
-        if encoder_hidden_states is not None:
-            self.attention_maps.append(attention_probs.detach().cpu())
-        
-        hidden_states = torch.bmm(attention_probs, encoder_hidden_states or hidden_states)
-        hidden_states = attn.reshape_batch_dim_to_heads(hidden_states)
-        
-        return hidden_states
-
-def generate_synthetic_data_with_attention(output_folder, classes, images_per_class, prompt_template="a photo of a {}", 
+def generate_synthetic_data(output_folder, classes, images_per_class, prompt_template="a photo of a {}", 
                           seed=None, start_idx=None, end_idx=None):
-    """Generate synthetic images and segment them using attention maps from SDXL."""
+    """Generate synthetic images for each class using Stable Diffusion and crop them using Grounding DINO."""
     
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is not available. Please check your GPU installation.")
     
     try:
-        # Initialize the pipeline
+        # Initialize SDXL
         pipe = DiffusionPipeline.from_pretrained(
             "stabilityai/stable-diffusion-xl-base-1.0",
             torch_dtype=torch.float16,
             use_safetensors=True,
             variant="fp16"
         )
-        
-        # Enable attention map extraction
-        attention_maps = []
-        custom_processor = CustomAttnProcessor(attention_maps)
-        
-        # Set the processor for all cross-attention blocks
-        for name, module in pipe.unet.named_modules():
-            if "attn2" in name:  # cross attention blocks
-                module.processor = custom_processor
-        
         pipe.to("cuda")
         
+        # Initialize Grounding DINO
+        print("Getting Grounding DINO paths...")
+        config_path, weights_path = get_groundingdino_paths()
+        print(f"Config path: {config_path}")
+        print(f"Weights path: {weights_path}")
+        print("Initializing Grounding DINO...")
+        groundingdino_model = load_model(config_path, weights_path)
+        print("Models initialized successfully")
+        
     except Exception as e:
-        raise RuntimeError(f"Error initializing SDXL: {e}")
+        raise RuntimeError(f"Error initializing models: {e}")
     
     if seed is not None:
         torch.manual_seed(seed)
@@ -68,218 +60,77 @@ def generate_synthetic_data_with_attention(output_folder, classes, images_per_cl
         print(f"\nProcessing classes from index {start} to {end}")
     
     for folder_name, class_name in classes:
-        print(f"\nGenerating segmented images for class: {class_name}")
+        print(f"\nGenerating images for class: {class_name}")
         if folder_name != class_name:
             print(f"Using folder name: {folder_name}")
         
         class_dir = os.path.join(output_folder, folder_name)
         os.makedirs(class_dir, exist_ok=True)
         
-        existing_images = len([f for f in os.listdir(class_dir) 
-                             if f.endswith(('.jpg', '.png'))])
+        # Contador de imágenes exitosamente guardadas
+        successful_images = len([f for f in os.listdir(class_dir) 
+                               if f.endswith(('.jpg', '.png'))])
         
-        if existing_images >= images_per_class:
-            print(f"Skipping {class_name}: already has {existing_images} images")
+        if successful_images >= images_per_class:
+            print(f"Skipping {class_name}: already has {successful_images} images")
             continue
 
-        for i in tqdm(range(existing_images, images_per_class)):
+        attempts = 0
+        while successful_images < images_per_class and attempts < images_per_class * 2:
+            attempts += 1
             prompt = prompt_template.format(class_name)
-            if i == 1:
+            if successful_images == 0:
                 print(f"Example prompt: {prompt}")
-            
             try:
-                # Clear previous attention maps
-                attention_maps.clear()
-                
-                # Generate image
+                # Generate image with SDXL
                 image = pipe(
                     prompt=prompt,
-                    generator=torch.manual_seed(seed + i if seed is not None else random.randint(0, 2**32 - 1))
+                    generator=torch.manual_seed(seed + attempts if seed is not None else random.randint(0, 2**32 - 1))
                 ).images[0]
                 
-                # Process attention maps if available
-                if attention_maps:
-                    # Combine attention maps from different layers
-                    combined_attention = torch.cat(attention_maps, dim=0)
-                    # Average across heads and tokens
-                    attention_mask = combined_attention.mean(0).mean(0)
+                # Convert PIL Image to numpy array for Grounding DINO
+                image_source = np.array(image)
+                
+                # Run Grounding DINO inference using the same prompt
+                boxes, logits, phrases = predict(
+                    model=groundingdino_model,
+                    image=image_source,
+                    caption=class_name,  # Using just the class name for better detection
+                    box_threshold=0.35,
+                    text_threshold=0.25
+                )
+                
+                if len(boxes) > 0:
+                    # Get the box with highest confidence
+                    best_box_idx = logits.argmax()
+                    box = boxes[best_box_idx]
                     
-                    # Normalize the mask
-                    attention_mask = (attention_mask - attention_mask.min()) / (attention_mask.max() - attention_mask.min())
+                    # Convert normalized coordinates to pixel coordinates
+                    H, W = image_source.shape[:2]
+                    box_abs = box_convert(box, in_fmt='xyxy', out_fmt='xyxy')
+                    box_abs = np.array([
+                        box_abs[0] * W,  # x1
+                        box_abs[1] * H,  # y1
+                        box_abs[2] * W,  # x2
+                        box_abs[3] * H   # y2
+                    ]).astype(int)
                     
-                    # Convert mask to proper size and format
-                    attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # Add batch and channel dims
-                    attention_mask = torch.nn.functional.interpolate(
-                        attention_mask, 
-                        size=image.size[::-1],  # PIL Image size is (width, height)
-                        mode='bilinear'
-                    )
-                    attention_mask = attention_mask.squeeze().numpy()
+                    # Crop image using the detected box
+                    cropped_image = image.crop((box_abs[0], box_abs[1], box_abs[2], box_abs[3]))
                     
-                    # Threshold the mask to make it binary
-                    threshold = 0.5  # Adjust this threshold as needed
-                    binary_mask = (attention_mask > threshold).astype(np.uint8) * 255
-                    
-                    # Convert image to numpy array
-                    image_array = np.array(image)
-                    
-                    # Apply mask to get segmented object
-                    mask_3channel = np.stack([binary_mask] * 3, axis=-1)
-                    
-                    # Apply mask to image
-                    segmented_image = image_array * (mask_3channel / 255.0)
-                    
-                    # Find bounding box of the mask
-                    rows = np.any(binary_mask, axis=1)
-                    cols = np.any(binary_mask, axis=0)
-                    rmin, rmax = np.where(rows)[0][[0, -1]]
-                    cmin, cmax = np.where(cols)[0][[0, -1]]
-                    
-                    # Crop the segmented image to the bounding box
-                    segmented_image = segmented_image[rmin:rmax+1, cmin:cmax+1]
-                    
-                    # Convert back to PIL Image
-                    segmented_image = Image.fromarray(segmented_image.astype(np.uint8))
-                    
-                    # Save segmented image
-                    image_path = os.path.join(class_dir, f"{folder_name}_{i+1}_segmented.jpg")
-                    segmented_image = segmented_image.convert('RGB')
-                    segmented_image.save(image_path, format='JPEG', quality=95)
+                    # Save only the cropped image
+                    successful_images += 1
+                    image_path = os.path.join(class_dir, f"{folder_name}_{successful_images}.jpg")
+                    cropped_image = cropped_image.convert('RGB')
+                    cropped_image.save(image_path, format='JPEG', quality=95)
+                    print(f"Successfully saved image {successful_images}/{images_per_class} for {class_name}")
+                else:
+                    print(f"No object detected for {class_name}, attempt {attempts} - retrying")
+                    continue
                 
             except Exception as e:
-                print(f"Error generating image {i+1} for {class_name}: {e}")
+                print(f"Error in attempt {attempts} for {class_name}: {e}")
                 continue
-
-def generate_segmented_image(output_folder, prompt, output_name, seed=None):
-    """Generate a single image and segment it using attention maps from SDXL."""
-    
-    if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is not available. Please check your GPU installation.")
-    
-    try:
-        # Initialize the pipeline
-        pipe = DiffusionPipeline.from_pretrained(
-            "stabilityai/stable-diffusion-xl-base-1.0",
-            torch_dtype=torch.float16,
-            use_safetensors=True,
-            variant="fp16"
-        )
-        
-        # Enable attention map extraction
-        attention_maps = []
-        custom_processor = CustomAttnProcessor(attention_maps)
-        
-        # Set the processor for all cross-attention blocks
-        for name, module in pipe.unet.named_modules():
-            if "attn2" in name:  # cross attention blocks
-                module.processor = custom_processor
-        
-        pipe.to("cuda")
-        
-    except Exception as e:
-        raise RuntimeError(f"Error initializing SDXL: {e}")
-    
-    if seed is not None:
-        torch.manual_seed(seed)
-        random.seed(seed)
-    
-    os.makedirs(output_folder, exist_ok=True)
-    
-    try:
-        # Clear previous attention maps
-        attention_maps.clear()
-        
-        # Generate image
-        image = pipe(
-            prompt=prompt,
-            generator=torch.manual_seed(seed if seed is not None else random.randint(0, 2**32 - 1))
-        ).images[0]
-        
-        # Process attention maps if available
-        if attention_maps:
-            # Combine attention maps from different layers
-            combined_attention = torch.cat(attention_maps, dim=0)
-            # Average across heads and tokens
-            attention_mask = combined_attention.mean(0).mean(0)
             
-            # Normalize the mask
-            attention_mask = (attention_mask - attention_mask.min()) / (attention_mask.max() - attention_mask.min())
-            
-            # Convert mask to proper size and format
-            attention_mask = attention_mask.unsqueeze(0).unsqueeze(0)  # Add batch and channel dims
-            attention_mask = torch.nn.functional.interpolate(
-                attention_mask, 
-                size=image.size[::-1],  # PIL Image size is (width, height)
-                mode='bilinear'
-            )
-            attention_mask = attention_mask.squeeze().numpy()
-            
-            # Threshold the mask to make it binary
-            threshold = 0.5  # Adjust this threshold as needed
-            binary_mask = (attention_mask > threshold).astype(np.uint8) * 255
-            
-            # Convert image to numpy array
-            image_array = np.array(image)
-            
-            # Apply mask to get segmented object
-            mask_3channel = np.stack([binary_mask] * 3, axis=-1)
-            
-            # Apply mask to image
-            segmented_image = image_array * (mask_3channel / 255.0)
-            
-            # Find bounding box of the mask
-            rows = np.any(binary_mask, axis=1)
-            cols = np.any(binary_mask, axis=0)
-            rmin, rmax = np.where(rows)[0][[0, -1]]
-            cmin, cmax = np.where(cols)[0][[0, -1]]
-            
-            # Crop the segmented image to the bounding box
-            segmented_image = segmented_image[rmin:rmax+1, cmin:cmax+1]
-            
-            # Convert back to PIL Image
-            segmented_image = Image.fromarray(segmented_image.astype(np.uint8))
-            
-            # Save segmented image
-            image_path = os.path.join(output_folder, f"{output_name}_segmented.jpg")
-            segmented_image = segmented_image.convert('RGB')
-            segmented_image.save(image_path, format='JPEG', quality=95)
-            
-            return image_path
-            
-    except Exception as e:
-        print(f"Error generating segmented image: {e}")
-        return None
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate synthetic segmented images using SDXL attention maps")
-    parser.add_argument("--output_folder", type=str, required=True,
-                      help="Directory to store segmented images")
-    parser.add_argument("--class_mapping", type=str, required=True,
-                      help="JSON file mapping folder names to class names")
-    parser.add_argument("--images_per_class", type=int, default=100,
-                      help="Number of synthetic images to generate per class")
-    parser.add_argument("--prompt_template", type=str, default="a photo of a {}",
-                      help="Template for generating prompts")
-    parser.add_argument("--seed", type=int, default=None,
-                      help="Random seed for reproducibility")
-    parser.add_argument("--start_idx", type=int, default=None,
-                      help="Starting index for generation")
-    parser.add_argument("--end_idx", type=int, default=None,
-                      help="Ending index for generation")
-    
-    args = parser.parse_args()
-    
-    with open(args.class_mapping, 'r') as f:
-        class_mapping = json.load(f)
-    
-    classes = [(folder_name, class_name) for folder_name, class_name in class_mapping.items()]
-    
-    generate_synthetic_data_with_attention(
-        output_folder=args.output_folder,
-        classes=classes,
-        images_per_class=args.images_per_class,
-        prompt_template=args.prompt_template,
-        seed=args.seed,
-        start_idx=args.start_idx,
-        end_idx=args.end_idx
-    ) 
+        if successful_images < images_per_class:
+            print(f"Warning: Only generated {successful_images}/{images_per_class} images for {class_name} after {attempts} attempts") 

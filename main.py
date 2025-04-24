@@ -3,7 +3,7 @@ import torch
 import argparse
 import copy
 from src.generation.synthetic_data import generate_synthetic_data
-from src.generation.synthetic_data_with_attention import generate_synthetic_data_with_attention
+from src.generation.synthetic_data_seg import generate_synthetic_data_seg
 from src.utils.utils import get_classes_from_folder
 from src.feature_extraction.feature_extractor import FeatureExtractor
 from src.evaluation.clip_test import ClipEvaluator
@@ -102,7 +102,7 @@ def main():
         
         if args.use_attention:
             print("Using attention maps for segmentation")
-            generate_synthetic_data_with_attention(
+            generate_synthetic_data_seg(
                 output_folder=args.synthetic_dir,
                 classes=classes,
                 images_per_class=args.images_per_class,

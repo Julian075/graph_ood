@@ -7,6 +7,7 @@ from diffusers import DiffusionPipeline
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 
 
+
 def generate_synthetic_data_seg(
     output_folder,
     classes,

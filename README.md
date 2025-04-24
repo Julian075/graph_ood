@@ -1,140 +1,100 @@
-# Synthetic Data Generation with Stable Diffusion
+# Graph OOD Project
 
-This repository contains scripts for generating synthetic image data using Stable Diffusion XL.
+## Installation
 
-## Environment Setup
+### Prerequisites
+- CUDA compatible GPU
+- Conda or Miniconda installed
 
-1. Create a new conda environment:
+### Setup Instructions
+
+1. Create and activate conda environment:
 ```bash
-conda create -n synthetic_data python=3.10
-conda activate synthetic_data
+conda create -n synthetic_domain python=3.10 -y
+conda activate synthetic_domain
 ```
 
-2. Install PyTorch with CUDA support:
+2. Install PyTorch and torchvision (separate for CUDA compatibility):
 ```bash
-conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
+pip install torch==2.2.2 torchvision==0.17.2
 ```
 
-3. Install other required packages:
+3. Install remaining dependencies:
 ```bash
-pip install diffusers==0.24.0
-pip install transformers
-pip install accelerate
-pip install safetensors
-pip install tqdm
-pip install pillow
+pip install -r requirements.txt
 ```
-
-## File Structure
-
-- `synthetic_data.py`: Main script for generating synthetic images
-- `class_mapping.json`: (Optional) Mapping file for numeric folder names to class names
 
 ## Usage
 
-### Basic Usage
+### Generating Synthetic Data
+To generate synthetic data, use the script `scripts/synthetic_data_seg.sh`:
 
-1. If your folders are already named with class names:
 ```bash
-python synthetic_data.py \
-  --train_folder "/path/to/train/folder" \
-  --output_folder "/path/to/output/folder" \
-  --images_per_class 100 \
-  --preset diverse
+bash scripts/synthetic_data_seg.sh
 ```
 
-2. If your folders are numeric and you have a mapping file:
-```bash
-python synthetic_data.py \
-  --train_folder "/path/to/train/folder" \
-  --output_folder "/path/to/output/folder" \
-  --class_mapping "class_mapping.json" \
-  --images_per_class 100 \
-  --preset diverse
+This script will:
+- Generate synthetic images using Stable Diffusion XL
+- Apply segmentation using Grounding DINO
+- Save the processed images in the specified output directory
+
+### Parameters
+- `--input_dir`: Directory containing real data
+- `--synthetic_dir`: Output directory for synthetic data
+- `--class_mapping`: JSON file mapping class names
+- `--images_per_class`: Number of images to generate per class
+- `--prompt_template`: Template for generation prompts (e.g. "a photo of a {}")
+- `--use_attention`: Whether to use attention maps
+- `--start_idx` and `--end_idx`: Range of classes to process
+
+## Project Structure
+```
+.
+├── data/
+│   ├── real_data/
+│   │   └── serengeti/          # Input directory with real images
+│   └── synthetic_data_segmented/
+│       └── serengeti/          # Output directory for synthetic images
+├── scripts/
+│   └── synthetic_data_seg.sh   # Main execution script
+├── src/
+│   └── generation/
+│       ├── synthetic_data_seg.py         # Main generation code
+│       └── synthetic_data_with_attention.py
+├── requirements.txt            # Project dependencies
+└── README.md
 ```
 
-### Available Presets
+## Data Organization
 
-- `default`: Balanced quality and adherence to prompt
-- `diverse`: More diverse outputs, good for training data
-- `creative`: Very creative outputs, less faithful to prompt
-- `precise`: More precise adherence to prompt
-- `fast`: Faster generation, slightly lower quality
-- `quality`: Higher quality, slower generation
-
-To see all presets:
-```bash
-python synthetic_data.py --list-presets
+### Input Data Structure
+Your input data should be organized as follows:
 ```
-
-### Custom Configuration
-
-You can override preset values:
-```bash
-python synthetic_data.py \
-  --train_folder "/path/to/train/folder" \
-  --output_folder "/path/to/output/folder" \
-  --preset diverse \
-  --guidance_scale 5.0 \
-  --num_inference_steps 50
-```
-
-## Folder Structure
-
-Your training data should be organized as follows:
-
-```
-train_folder/
+data/real_data/serengeti/
   ├── class1/
   │   ├── image1.jpg
   │   └── image2.jpg
   ├── class2/
   │   └── ...
-  └── class3/
+  └── classN/
       └── ...
 ```
 
-Or with numeric folders:
+### Output Data Structure
+Generated images will maintain a similar structure:
 ```
-train_folder/
-  ├── 0/
-  │   ├── image1.jpg
-  │   └── image2.jpg
-  ├── 1/
-  │   └── ...
-  └── 2/
-      └── ...
-```
-
-## Class Mapping File
-
-If using numeric folders, create a `class_mapping.json`:
-```json
-{
-    "0": "actual_class_name1",
-    "1": "actual_class_name2",
-    "2": "actual_class_name3"
-}
-```
-
-## Output Structure
-
-The generated images will maintain the same folder structure as your input:
-```
-output_folder/
+data/synthetic_data_segmented/serengeti/
   ├── class1/
   │   ├── class1_1.jpg
   │   └── class1_2.jpg
   ├── class2/
   │   └── ...
-  └── class3/
+  └── classN/
       └── ...
 ```
 
 ## Tips
-
-1. Start with the `diverse` preset for training data generation
-2. Use `--seed` for reproducible results
-3. The script will resume from where it left off if interrupted
-4. Generated images are saved in JPG format
-5. Use `quality` preset if you need higher quality images 
+1. The script supports parallel processing for faster generation
+2. Generated images are automatically cropped using Grounding DINO
+3. The process will resume from where it left off if interrupted
+4. Use `--start_idx` and `--end_idx` to process specific ranges of classes 

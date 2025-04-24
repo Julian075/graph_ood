@@ -4,7 +4,7 @@ import argparse
 import copy
 from src.generation.synthetic_data import generate_synthetic_data
 from src.generation.synthetic_data_seg import generate_synthetic_data_seg
-from src.utils.utils import get_classes_from_folder
+from src.utils.utils import get_classes_from_folder, set_global_seed
 from src.feature_extraction.feature_extractor import FeatureExtractor
 from src.evaluation.clip_test import ClipEvaluator
 from src.evaluation.clip_adapter_eval import ClipAdapterEvaluator
@@ -51,7 +51,7 @@ def parse_args():
                       help='Starting index for generation')
     parser.add_argument('--end_idx', type=int, default=None,
                       help='Ending index for generation')
-    parser.add_argument('--seed', type=int, default=42,
+    parser.add_argument('--seed', type=int, default=1064200250,
                       help='Random seed for reproducibility')
     parser.add_argument('--hyperparameter_search', type=str, default='False',
                       choices=['True', 'False'],
@@ -59,6 +59,7 @@ def parse_args():
     parser.add_argument('--use_attention', type=str, default='False',
                       choices=['True', 'False'],
                       help='Use attention maps for segmentation (True/False)')
+    
     
     args = parser.parse_args()
     
@@ -72,8 +73,11 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    set_global_seed(args.seed)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    config = Config(args.feature_dir, args.feature_dir_ood, args.class_mapping, args.prompt_template, args.use_synthetic_data, device)
+    config = Config(args.feature_dir, args.feature_dir_ood, args.class_mapping, args.prompt_template, args.use_synthetic_data, args.seed, device)
     # Get classes from training directory
     print("\nGetting classes from training directory...")
     train_folder = os.path.join(args.input_dir, "train")

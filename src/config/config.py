@@ -1,5 +1,5 @@
 class Config:
-    def __init__(self, feature_dir: str, feature_dir_ood: str,class_mapping: str, prompt_template: str, use_synthetic_data: bool, device: str):
+    def __init__(self, feature_dir: str, feature_dir_ood: str,class_mapping: str, prompt_template: str, use_synthetic_data: bool, seed: int, device: str):
         self.feature_dir = feature_dir
         self.feature_dir_ood = feature_dir_ood
         self.output_dir = "./checkpoints"
@@ -15,7 +15,7 @@ class Config:
             "temperature": 0.1,
             "num_epochs": 107,
             "patience": 5,
-            "seed": 1064200250,
+            "seed": seed,
             "search_space": {
                 "n_trials": 20,
                 "metric_name": "accuracy",
@@ -39,7 +39,7 @@ class Config:
             "num_epochs": 107,
             "gnn_hidden_dim": 256,
             "num_gnn_layers": 2,
-            "seed": 1064200250,
+            "seed": seed,
             "search_space": {
                 "n_trials": 20,
                 "metric_name": "accuracy",

@@ -35,7 +35,7 @@ python main.py \
     --feature_dir ${FEATURE_DIR} \
     --feature_dir_ood ${FEATURE_DIR_OOD} \
     --class_mapping ${CLASS_MAPPING} \
-    --use_synthetic_data True \
+    --use_synthetic_data False \
     --prompt_template "a photo of a {}" \
     --OOD_test True \
 

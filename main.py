@@ -14,6 +14,9 @@ from src.training.train_adapter import CLIPAdapterTrainer
 from src.models.clip_adapter_graph import CLIPAdapterGraph
 from src.training.train_adapter_graph import CLIPAdapterGraphTrainer
 from src.evaluation.clip_adapter_graph_eval import ClipAdapterGraphEvaluator
+from src.models.clip_adapter_ood import CLIPAdapterOOD
+from src.training.train_adapter_ood import CLIPAdapterOODTrainer
+from src.evaluation.clip_adapter_ood_eval import ClipAdapterOODEvaluator
 from src.utils.hyperparameter_search import RandomSearch, SearchSpace
 from src.config.config import Config
 
@@ -315,6 +318,78 @@ def main():
         checkpoint = torch.load(checkpoint_path, weights_only=False)
         clip_adapter_graph.load_state_dict(checkpoint['model_state_dict'])
         clip_evaluator.model = clip_adapter_graph
+        results = clip_evaluator.evaluate()
+        print(f"\nBest validation accuracy achieved: {best_val_acc:.4f}")
+    elif args.mode == 'train_clip_adapter_ood':
+        config.num_classes = len(classes)
+        if args.hyperparameter_search:
+            search_space = config.clip_adapter_ood['search_space']
+            
+            # Convert config search spaces to SearchSpace objects
+            search_spaces = []
+            for param_name, param_config in search_space['search_spaces'].items():
+                search_spaces.append(
+                    SearchSpace(
+                        name=param_name,
+                        type=param_config['type'],
+                        range=param_config['range'],
+                        log_scale=param_config.get('log_scale', False)
+                    )
+                )
+            
+            # Initialize random search
+            random_search = RandomSearch(
+                search_spaces=search_spaces,
+                n_trials=search_space['n_trials'],
+                metric_name=search_space['metric_name'],
+                maximize=search_space['maximize'],
+                seed=config.clip_adapter_ood['seed']
+            )
+            
+            # Define training function for hyperparameter search
+            def train_with_params(params):
+                # Update config with new parameters
+                current_config = copy.deepcopy(config)
+                for param_name, param_value in params.items():
+                    current_config.clip_adapter_ood[param_name] = param_value
+                
+                # Initialize trainer with current parameters
+                clip_trainer = CLIPAdapterOODTrainer(current_config)
+                
+                # Train and return validation accuracy
+                val_acc = clip_trainer.train(classes_names=classes)
+                return val_acc
+            
+            # Run hyperparameter search
+            print("\nStarting hyperparameter search...")
+            best_params = random_search.search(
+                train_fn=train_with_params,
+                output_dir=os.path.join(config.output_dir, 'clip_adapter_ood', 'hyperparameter_search'),
+                verbose=True
+            )
+            
+            # Train final model with best parameters
+            print("\nTraining final model with best parameters...")
+            for param_name, param_value in best_params.items():
+                config.clip_adapter_ood[param_name] = param_value
+                
+            clip_trainer = CLIPAdapterOODTrainer(config)
+            clip_trainer.train(classes_names=classes)
+        else:
+            # Initialize trainer
+            clip_trainer = CLIPAdapterOODTrainer(config)
+            best_val_acc, checkpoint_path = clip_trainer.train(classes_names=classes)
+        
+        # Test phase
+        if args.OOD_test:
+            clip_evaluator = ClipAdapterOODEvaluator(model=clip_trainer.model, classes=classes_ood, ood_test=True, config=config)
+        else:
+            clip_evaluator = ClipAdapterOODEvaluator(model=clip_trainer.model, classes=classes, ood_test=False, config=config)
+        
+        # Load the best checkpoint before evaluation
+        checkpoint = torch.load(checkpoint_path, weights_only=False)
+        clip_trainer.model.load_state_dict(checkpoint['model_state_dict'])
+        clip_evaluator.model = clip_trainer.model
         results = clip_evaluator.evaluate()
         print(f"\nBest validation accuracy achieved: {best_val_acc:.4f}")
 

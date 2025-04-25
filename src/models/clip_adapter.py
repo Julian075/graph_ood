@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.cuda.amp import autocast
 import numpy as np
 
 class CLIPAdapter(nn.Module):
@@ -39,7 +38,6 @@ class CLIPAdapter(nn.Module):
         #torch.backends.cudnn.deterministic = True
         #torch.backends.cudnn.benchmark = False
     
-    #@autocast()   
     def forward(self, x):
         """
         Forward pass with explicit precision handling

@@ -22,4 +22,10 @@ urllib3>=1.26.16
 setuptools>=68.0.0
 wheel>=0.40.0
 git+https://github.com/openai/CLIP.git@main
+torch>=2.6.0
+torchvision>=0.17.0
+torch-geometric>=2.4.0
+torch-scatter>=2.1.1
+torch-sparse>=0.6.17
+torch-cluster>=1.6.1
 

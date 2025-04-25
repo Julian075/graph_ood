@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.cuda.amp import autocast
 import numpy as np
 import torch_geometric.nn as gnn
 from torch_geometric.utils import dense_to_sparse
@@ -60,7 +59,6 @@ class CLIPAdapterGraph(nn.Module):
         #torch.backends.cudnn.deterministic = True
         #torch.backends.cudnn.benchmark = False
     
-    @autocast()    
     def create_adjacency_matrix(self, features):
         """
         Create adjacency matrix based on cosine similarity between node features
@@ -70,6 +68,9 @@ class CLIPAdapterGraph(nn.Module):
             edge_index: Sparse adjacency matrix
             edge_weight: Edge weights based on cosine similarity
         """
+        # Ensure input is float32
+        features = features.float()
+        
         # Compute cosine similarity matrix
         features_norm = F.normalize(features, p=2, dim=1)
         similarity_matrix = torch.mm(features_norm, features_norm.t())

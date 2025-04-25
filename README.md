@@ -3,7 +3,7 @@
 ## Installation
 
 ### Prerequisites
-- CUDA compatible GPU
+- CUDA compatible GPU (CUDA 12.4 recommended)
 - Conda or Miniconda installed
 
 ### Setup Instructions
@@ -14,14 +14,30 @@ conda create -n synthetic_domain python=3.10 -y
 conda activate synthetic_domain
 ```
 
-2. Install PyTorch and torchvision (separate for CUDA compatibility):
+2. Install PyTorch and dependencies:
+
+Option A: Using conda (recommended):
 ```bash
-pip install torch==2.2.2 torchvision==0.17.2
+conda env create -f environment.yml
 ```
 
-3. Install remaining dependencies:
+Option B: Using pip:
 ```bash
+# Install PyTorch with CUDA support
+pip install torch==2.6.0 torchvision
+
+# Install PyTorch Geometric and its dependencies
+pip install torch-geometric
+pip install torch-scatter torch-sparse torch-cluster -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
+
+# Install remaining dependencies
 pip install -r requirements.txt
+```
+
+Note: If you encounter CUDA-related errors with PyTorch Geometric, you may need to reinstall torch-cluster with explicit CUDA support:
+```bash
+pip uninstall torch-cluster -y
+pip install torch-cluster -f https://data.pyg.org/whl/torch-2.6.0+cu124.html
 ```
 
 ## Usage

@@ -7,16 +7,16 @@ channels:
   - defaults
 dependencies:
   - python=3.10
-  - pytorch=2.0.1
+  - pytorch=2.6.0
   - torchvision
-  - pytorch-cuda=11.8
+  - pytorch-cuda=12.4
   - pyg=2.4.0
   - pip
   - pip:
-    - torch-geometric==2.3.1
-    - torch-scatter==2.1.1
-    - torch-sparse==0.6.17
-    - torch-cluster==1.6.1
+    - torch-geometric>=2.4.0
+    - torch-scatter>=2.1.1
+    - torch-sparse>=0.6.17
+    - torch-cluster>=1.6.1
     - diffusers==0.19.3
     - transformers==4.31.0
     - accelerate==0.21.0

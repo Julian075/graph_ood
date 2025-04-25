@@ -4,15 +4,15 @@ from torch.utils.data import DataLoader, TensorDataset
 import clip
 from tqdm import tqdm
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
-class ClipAdapterGraphEvaluator:
+class ClipAdapterOODEvaluator:
     def __init__(self, model, classes: List[str], ood_test: bool, config):
         """
-        Initialize the evaluator for the graph-enhanced adapter.
+        Initialize the evaluator for OOD adapter.
         
         Args:
-            model: The CLIPAdapterGraph model
+            model: The CLIPAdapterOOD model
             classes: List of class names
             ood_test: Whether to evaluate on OOD test set
             config: Configuration object containing model settings
@@ -30,9 +30,9 @@ class ClipAdapterGraphEvaluator:
         
         # Load adapter model from checkpoint
         if config.use_synthetic_data:
-            checkpoint_path = os.path.join(config.output_dir, 'clip_adapter_graph', 'adapter_graph_checkpoint_synthetic.pt')
+            checkpoint_path = os.path.join(config.output_dir, 'clip_adapter_ood', 'adapter_ood_checkpoint_synthetic.pt')
         else:
-            checkpoint_path = os.path.join(config.output_dir, 'clip_adapter_graph', 'adapter_graph_checkpoint.pt')
+            checkpoint_path = os.path.join(config.output_dir, 'clip_adapter_ood', 'adapter_ood_checkpoint.pt')
         
         checkpoint = torch.load(checkpoint_path, weights_only=False)
         self.model = model
@@ -47,7 +47,7 @@ class ClipAdapterGraphEvaluator:
         """Find classes in test set that weren't in training"""
         test_classes = set(test_labels)
         train_classes = set(self.classes)
-        return list(test_classes - train_classes)
+        return sorted(list(test_classes - train_classes))
 
     def evaluate_test_set(self, test_features: torch.Tensor, test_labels: List[str], split_name: str) -> Dict[str, float]:
         """
@@ -80,13 +80,14 @@ class ClipAdapterGraphEvaluator:
         dataset = TensorDataset(test_features)
         data_loader = DataLoader(
             dataset, 
-            batch_size=self.config.clip_adapter_graph['batch_size'],
+            batch_size=self.config.clip_adapter_ood['batch_size'],
             shuffle=False,
             pin_memory=True
         )
         
         all_predictions = []
         all_similarities = []
+        all_node_logits = []
         
         # Predict in batches
         with torch.no_grad():
@@ -95,19 +96,32 @@ class ClipAdapterGraphEvaluator:
                 batch_features = batch_features.to(self.device).float()
                 batch_features = F.normalize(batch_features, dim=-1)
                 
-                # Forward pass with explicit precision
-                adapted_features, _ = self.model(batch_features, training=False)
-                adapted_features = F.normalize(adapted_features, dim=-1)
-                similarity = torch.matmul(adapted_features, self.text_features.T)
+                # Forward pass
+                adapter_features, node_logits = self.model(batch_features)
+                
+                # Normalize features
+                adapter_features = F.normalize(adapter_features, dim=-1)
+                
+                # Compute similarities with text features
+                similarity = torch.matmul(adapter_features, self.text_features.T)
                 similarity = F.normalize(similarity, dim=-1)
                 
+                # Get predictions
                 predictions = torch.argmax(similarity, dim=1)
+                
+                # Store results
                 all_predictions.append(predictions.cpu())
                 all_similarities.append(similarity.cpu())
+                if node_logits is not None:
+                    all_node_logits.append(node_logits.cpu())
         
         # Concatenate all predictions and similarities
         predictions = torch.cat(all_predictions)
         similarities = torch.cat(all_similarities)
+        if all_node_logits:
+            node_logits = torch.cat(all_node_logits)
+        else:
+            node_logits = None
         
         # Calculate accuracy
         correct = (predictions == label_indices).sum().item()
@@ -123,16 +137,25 @@ class ClipAdapterGraphEvaluator:
                 class_total = mask.sum().item()
                 per_class_acc[class_name] = (class_correct / class_total * 100)
         
+        # Calculate node classification accuracy if available
+        node_acc = None
+        if node_logits is not None:
+            node_predictions = torch.argmax(node_logits, dim=1)
+            node_correct = (node_predictions == label_indices).sum().item()
+            node_acc = node_correct / total * 100
+        
         print(f"\nResults for {split_name}:")
         print(f"Overall Accuracy: {accuracy:.2f}%")
         print(f"Correct predictions: {correct}/{total}")
+        if node_acc is not None:
+            print(f"Node Classification Accuracy: {node_acc:.2f}%")
         
         print("\nPer-class accuracy:")
         for class_name, acc in per_class_acc.items():
             prefix = "* " if class_name not in self.classes else "  "
             print(f"{prefix}{class_name}: {acc:.2f}%")
         
-        return {
+        results = {
             'accuracy': accuracy,
             'correct': correct,
             'total': total,
@@ -141,6 +164,14 @@ class ClipAdapterGraphEvaluator:
             'similarities': similarities,
             'all_classes': all_classes
         }
+        
+        if node_acc is not None:
+            results.update({
+                'node_accuracy': node_acc,
+                'node_logits': node_logits
+            })
+            
+        return results
 
     def evaluate(self) -> Dict[str, Dict[str, float]]:
         """
@@ -179,6 +210,8 @@ class ClipAdapterGraphEvaluator:
             print(f"\n{split_name}:")
             print(f"Accuracy: {metrics['accuracy']:.2f}%")
             print(f"Correct predictions: {metrics['correct']}/{metrics['total']}")
+            if 'node_accuracy' in metrics:
+                print(f"Node Classification Accuracy: {metrics['node_accuracy']:.2f}%")
         
         return results
 
@@ -204,8 +237,8 @@ class ClipAdapterGraphEvaluator:
                 prompts = [template.format(class_name) for class_name in class_names]
                 text_features = []
                 
-                for i in range(0, len(prompts), self.config.clip_adapter['batch_size']):
-                    batch_prompts = prompts[i:i + self.config.clip_adapter['batch_size']]
+                for i in range(0, len(prompts), self.config.clip_adapter_ood['batch_size']):
+                    batch_prompts = prompts[i:i + self.config.clip_adapter_ood['batch_size']]
                     batch_features = self.encode_text(batch_prompts)
                     text_features.append(batch_features)
                 

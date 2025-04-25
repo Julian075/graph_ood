@@ -43,9 +43,32 @@ This script will:
 - `--synthetic_dir`: Output directory for synthetic data
 - `--class_mapping`: JSON file mapping class names
 - `--images_per_class`: Number of images to generate per class
-- `--prompt_template`: Template for generation prompts (e.g. "a photo of a {}")
+- `--prompt_template`: Either a single template string (e.g. "a photo of a {}") or path to a JSON file containing a list of templates
 - `--use_attention`: Whether to use attention maps
 - `--start_idx` and `--end_idx`: Range of classes to process
+
+### Prompt Templates
+You can use either a single prompt template or a JSON file containing multiple templates. For the latter, create a `prompts_templates.json` file with a list of diverse prompts.
+
+The provided `prompts_templates.json` was created using an LLM with the following prompt:
+```
+Generate a list of 100 prompt templates for Stable Diffusion where {} is the main subject. The prompts should:
+- Be versatile (work with any object/being)
+- Vary in perspective, lighting, and context
+- Avoid technical or quality terms (4k, HD, etc.)
+- Be natural and concise
+
+Format: ["prompt 1", "prompt 2", ...]
+```
+
+Example usage:
+```bash
+# Using a single template
+python main.py --prompt_template "a photo of a {}"
+
+# Using multiple templates from JSON
+python main.py --prompt_template prompts_templates.json
+```
 
 ## Project Structure
 ```

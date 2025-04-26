@@ -93,7 +93,11 @@ def main():
     
     # Get classes from training directory
     print("\nGetting classes from training directory...")
-    train_folder = os.path.join(args.input_dir, "train")
+    if args.input_dir.endswith('VLCS') or args.input_dir.endswith('PACS'):
+        folder=os.listdir(args.input_dir)
+        train_folder = os.path.join(args.input_dir, folder[0])
+    else:
+        train_folder = os.path.join(args.input_dir, "train")
     classes = get_classes_from_folder(train_folder, args.class_mapping)
     print(f"Found {len(classes)} classes")
     if args.OOD_test:

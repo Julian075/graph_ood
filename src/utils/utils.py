@@ -13,7 +13,7 @@ def load_class_mapping(mapping_file):
 def get_classes_from_folder(train_folder, mapping_file=None):
     """Extract classes from training folder structure with optional mapping."""
     if not os.path.exists(train_folder):
-        raise ValueError(f"Training folder {train_folder} does not exist")
+        raise ValueError(f"Directory {train_folder} does not exist")
     
     folder_names = [d for d in os.listdir(train_folder) 
                    if os.path.isdir(os.path.join(train_folder, d))]

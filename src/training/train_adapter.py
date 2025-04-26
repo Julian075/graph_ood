@@ -7,6 +7,8 @@ import clip
 from typing import List
 from src.models.clip_adapter import CLIPAdapter
 import numpy as np
+import wandb
+
 class CLIPAdapterTrainer:
     def __init__(self, config):
         self.model = CLIPAdapter(config.clip_adapter['reduction_factor'],config.clip_adapter['seed'], config.device)
@@ -16,6 +18,27 @@ class CLIPAdapterTrainer:
         self.feature_dir = config.feature_dir
         self.prompt_template = config.prompt_template
         self.use_synthetic_data = config.use_synthetic_data
+        
+        # Get Weights & Biases token from environment
+        wandb_token = os.getenv('WANDB_TOKEN')
+        if not wandb_token:
+            raise ValueError("WANDB_TOKEN not found in environment variables. Please set it with 'export WANDB_TOKEN=...'")
+            
+        # Initialize wandb with token
+        wandb.login(key=wandb_token)
+        wandb.init(
+            project="clip-adapter-training",
+            config={
+                "architecture": "CLIPAdapter",
+                "learning_rate": config.clip_adapter['learning_rate'],
+                "epochs": config.clip_adapter['num_epochs'],
+                "batch_size": config.clip_adapter['batch_size'],
+                "temperature": config.clip_adapter['temperature'],
+                "reduction_factor": config.clip_adapter['reduction_factor'],
+                "seed": config.clip_adapter['seed'],
+                "use_synthetic": config.use_synthetic_data
+            }
+        )
         
         # Initialize SGD optimizer with momentum
         self.optimizer = torch.optim.SGD(
@@ -151,18 +174,20 @@ class CLIPAdapterTrainer:
             loss.backward()
             
             # Optional gradient clipping
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            #torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             
             self.optimizer.step()
             
             total_loss += loss.item()
             num_batches += 1
             
-            # Debug info cada N batches
-            if num_batches % 10 == 0:
-                print(f"\nBatch {num_batches} stats:")
-                print(f"Loss: {loss.item():.4f}")
-                print(f"Adapted features - min: {adapted_features.min().item():.4f}, max: {adapted_features.max().item():.4f}")
+            # Log batch metrics
+            wandb.log({
+                "batch_loss": loss.item(),
+                "batch_features_norm": torch.norm(adapted_features).item(),
+                "batch_features_mean": adapted_features.mean().item(),
+                "batch_features_std": adapted_features.std().item()
+            })
         
         return total_loss / num_batches if num_batches > 0 else float('nan')
     
@@ -324,9 +349,9 @@ class CLIPAdapterTrainer:
 
         # Ensure text features are float32
         text_features = text_features.float()
-        print(f"\nText features dtype: {text_features.dtype}")
-        print(f"Text features shape: {text_features.shape}")
-        print(f"Text features stats - min: {text_features.min().item():.4f}, max: {text_features.max().item():.4f}")
+        #print(f"\nText features dtype: {text_features.dtype}")
+        #print(f"Text features shape: {text_features.shape}")
+        #print(f"Text features stats - min: {text_features.min().item():.4f}, max: {text_features.max().item():.4f}")
 
         # Training loop
         best_val_acc = 0
@@ -342,11 +367,23 @@ class CLIPAdapterTrainer:
             val_acc = self.validate(val_loader, text_features)
             print(f"Validation accuracy: {val_acc:.4f}")
             
+            # Log epoch metrics
+            wandb.log({
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_accuracy": val_acc,
+                "best_val_accuracy": best_val_acc,
+                "learning_rate": self.optimizer.param_groups[0]['lr']
+            })
+            
             if val_acc > best_val_acc:
                 print(f"Validation accuracy improved from {best_val_acc:.4f} to {val_acc:.4f}")
                 best_val_acc = val_acc
                 patience_counter = 0
                 best_checkpoint_path = self.save_checkpoint(val_acc)
+                
+                # Log best model to wandb
+                wandb.save(best_checkpoint_path)
             else:
                 patience_counter += 1
                 print(f"Validation accuracy did not improve. Patience: {patience_counter}/{self.config.clip_adapter['patience']}")
@@ -357,4 +394,8 @@ class CLIPAdapterTrainer:
         
         print(f"\nTraining completed. Best validation accuracy: {best_val_acc:.4f}")
         print(f"Best model saved at: {best_checkpoint_path}")
+        
+        # Close wandb run
+        wandb.finish()
+        
         return best_val_acc, best_checkpoint_path

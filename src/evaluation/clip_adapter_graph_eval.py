@@ -7,7 +7,7 @@ import os
 from typing import List, Dict, Optional
 
 class ClipAdapterGraphEvaluator:
-    def __init__(self, model, classes: List[str], ood_test: bool, config):
+    def __init__(self, model, classes: List[str], ood_test: bool, config, checkpoint_path: str = None):
         """
         Initialize the evaluator for the graph-enhanced adapter.
         
@@ -16,6 +16,8 @@ class ClipAdapterGraphEvaluator:
             classes: List of class names
             ood_test: Whether to evaluate on OOD test set
             config: Configuration object containing model settings
+            checkpoint_path: Optional path to the checkpoint to load. If not provided,
+                           will try to use a default name based on synthetic data usage.
         """
         self.config = config
         self.device = config.device
@@ -29,10 +31,12 @@ class ClipAdapterGraphEvaluator:
         self.clip.eval()
         
         # Load adapter model from checkpoint
-        if config.use_synthetic_data:
-            checkpoint_path = os.path.join(config.output_dir, 'clip_adapter_graph', 'adapter_graph_checkpoint_synthetic.pt')
-        else:
-            checkpoint_path = os.path.join(config.output_dir, 'clip_adapter_graph', 'adapter_graph_checkpoint.pt')
+        if checkpoint_path is None:
+            # Use default paths as fallback
+            if config.use_synthetic_data:
+                checkpoint_path = os.path.join(config.output_dir, 'clip_adapter_graph', 'adapter_graph_checkpoint_synthetic.pt')
+            else:
+                checkpoint_path = os.path.join(config.output_dir, 'clip_adapter_graph', 'adapter_graph_checkpoint.pt')
         
         checkpoint = torch.load(checkpoint_path, weights_only=False)
         self.model = model

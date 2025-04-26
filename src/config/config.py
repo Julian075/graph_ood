@@ -32,7 +32,7 @@ class Config:
             }
         }
         self.clip_adapter_graph = {
-            "patience": 5,
+            "patience": 500,
             "reduction_factor": 2,
             "learning_rate": 1e-2,
             "batch_size": 128,

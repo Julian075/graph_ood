@@ -7,6 +7,7 @@ import clip
 from typing import List
 from src.models.clip_adapter_graph import CLIPAdapterGraph
 import numpy as np
+import wandb
 
 class CLIPAdapterGraphTrainer:
     def __init__(self, config):
@@ -23,6 +24,29 @@ class CLIPAdapterGraphTrainer:
         self.feature_dir = config.feature_dir
         self.prompt_template = config.prompt_template
         self.use_synthetic_data = config.use_synthetic_data
+        
+        # Get Weights & Biases token from environment
+        wandb_token = os.getenv('WANDB_TOKEN')
+        if not wandb_token:
+            raise ValueError("WANDB_TOKEN not found in environment variables. Please set it with 'export WANDB_TOKEN=...'")
+            
+        # Initialize wandb with token
+        wandb.login(key=wandb_token)
+        wandb.init(
+            project="clip-adapter-graph-training",
+            config={
+                "architecture": "CLIPAdapterGraph",
+                "learning_rate": config.clip_adapter_graph['learning_rate'],
+                "epochs": config.clip_adapter_graph['num_epochs'],
+                "batch_size": config.clip_adapter_graph['batch_size'],
+                "temperature": config.clip_adapter_graph['temperature'],
+                "reduction_factor": config.clip_adapter_graph['reduction_factor'],
+                "gnn_hidden_dim": config.clip_adapter_graph['gnn_hidden_dim'],
+                "num_gnn_layers": config.clip_adapter_graph['num_gnn_layers'],
+                "seed": config.clip_adapter_graph['seed'],
+                "use_synthetic": config.use_synthetic_data
+            }
+        )
         
         # Initialize SGD optimizer with momentum
         self.optimizer = torch.optim.SGD(
@@ -58,11 +82,12 @@ class CLIPAdapterGraphTrainer:
         # Compute adapter loss
         adapter_logits = torch.matmul(image_features, text_features.T) / self.temperature
         adapter_loss = self.compute_single_contrastive_loss(adapter_logits, labels)
+        print(f"Adapter loss: {adapter_loss.item():.4f}")
         
         # Compute GNN loss
         gnn_logits = torch.matmul(gnn_features, text_features.T) / self.temperature
         gnn_loss = self.compute_single_contrastive_loss(gnn_logits, labels)
-        
+        print(f"GNN loss: {gnn_loss.item():.4f}")
         # Total loss is the sum of both losses
         total_loss = adapter_loss + gnn_loss
         return total_loss
@@ -103,7 +128,9 @@ class CLIPAdapterGraphTrainer:
     def train_epoch(self, train_loader, text_features):
         """Train for one epoch with explicit precision handling."""
         self.model.train()
-        total_loss = 0
+        total_adapter_loss = 0
+        total_gnn_loss = 0
+        total_combined_loss = 0
         num_batches = 0
         
         for batch_features, batch_labels, _ in tqdm(train_loader, desc="Training"):
@@ -121,32 +148,37 @@ class CLIPAdapterGraphTrainer:
             adapted_features = F.normalize(adapted_features, dim=-1)
             gnn_features = F.normalize(gnn_features, dim=-1)
             
-            # Compute combined loss
-            loss = self.compute_contrastive_loss(
-                adapted_features, gnn_features, text_features, batch_labels
-            )
+            # Compute individual losses
+            adapter_logits = torch.matmul(adapted_features, text_features.T) / self.temperature
+            gnn_logits = torch.matmul(gnn_features, text_features.T) / self.temperature
+            
+            adapter_loss = self.compute_single_contrastive_loss(adapter_logits, batch_labels)
+            gnn_loss = self.compute_single_contrastive_loss(gnn_logits, batch_labels)
+            
+            # Total loss is the sum of both losses
+            total_loss = adapter_loss + gnn_loss
             
             # Backward pass
             self.optimizer.zero_grad()
-            loss.backward()
+            total_loss.backward()
             
             # Optional gradient clipping
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
             
             self.optimizer.step()
             
-            total_loss += loss.item()
+            # Accumulate losses
+            total_adapter_loss += adapter_loss.item()
+            total_gnn_loss += gnn_loss.item()
+            total_combined_loss += total_loss.item()
             num_batches += 1
-            
-            # Debug info cada N batches
-            if num_batches % 10 == 0:
-                print(f"\nBatch {num_batches} stats:")
-                print(f"Loss: {loss.item():.4f}")
-                print(f"Adapted features - min: {adapted_features.min().item():.4f}, max: {adapted_features.max().item():.4f}")
-                if gnn_features is not None:
-                    print(f"GNN features - min: {gnn_features.min().item():.4f}, max: {gnn_features.max().item():.4f}")
         
-        return total_loss / num_batches if num_batches > 0 else float('nan')
+        avg_losses = {
+            'adapter': total_adapter_loss / num_batches,
+            'gnn': total_gnn_loss / num_batches,
+            'total': total_combined_loss / num_batches
+        }
+        return avg_losses
     
     def validate(self, val_loader, text_features):
         """Validate the model with explicit precision handling."""
@@ -307,9 +339,9 @@ class CLIPAdapterGraphTrainer:
 
         # Ensure text features are float32
         text_features = text_features.float()
-        print(f"\nText features dtype: {text_features.dtype}")
-        print(f"Text features shape: {text_features.shape}")
-        print(f"Text features stats - min: {text_features.min().item():.4f}, max: {text_features.max().item():.4f}")
+        #print(f"\nText features dtype: {text_features.dtype}")
+        #print(f"Text features shape: {text_features.shape}")
+        #print(f"Text features stats - min: {text_features.min().item():.4f}, max: {text_features.max().item():.4f}")
 
         # Training loop
         best_val_acc = 0
@@ -319,17 +351,87 @@ class CLIPAdapterGraphTrainer:
         for epoch in range(self.config.clip_adapter_graph['num_epochs']):
             print(f"\nEpoch {epoch + 1}/{self.config.clip_adapter_graph['num_epochs']}")
             
-            train_loss = self.train_epoch(train_loader, text_features)
-            print(f"Training loss: {train_loss:.4f}")
+            train_losses = self.train_epoch(train_loader, text_features)
+            print(f"Training losses:")
+            print(f"  Adapter: {train_losses['adapter']:.4f}")
+            print(f"  GNN: {train_losses['gnn']:.4f}")
+            print(f"  Total: {train_losses['total']:.4f}")
             
             val_acc = self.validate(val_loader, text_features)
             print(f"Validation accuracy: {val_acc:.4f}")
+            
+            # Log metrics
+            wandb.log({
+                "epoch": epoch,
+                "train/losses/adapter": train_losses['adapter'],
+                "train/losses/gnn": train_losses['gnn'],
+                "train/losses/total": train_losses['total'],
+                "val/accuracy": val_acc,
+                "best_val_accuracy": best_val_acc,
+                "learning_rate": self.optimizer.param_groups[0]['lr']
+            })
+            
+            # Create plots for wandb
+            # 1. Training Losses Plot
+            wandb.log({
+                "plots/training_losses": wandb.plot.line_series(
+                    xs=[epoch],
+                    ys=[[train_losses['adapter']], 
+                        [train_losses['gnn']], 
+                        [train_losses['total']]],
+                    keys=['Adapter', 'GNN', 'Total'],
+                    title='Training Losses',
+                    xname='Epoch'
+                )
+            })
+            
+            # 2. Loss Proportions Plot
+            wandb.log({
+                "plots/loss_proportions": wandb.plot.line_series(
+                    xs=[epoch],
+                    ys=[[train_losses['adapter'] / train_losses['total']], 
+                        [train_losses['gnn'] / train_losses['total']]],
+                    keys=['Adapter Proportion', 'GNN Proportion'],
+                    title='Loss Proportions',
+                    xname='Epoch'
+                )
+            })
+            
+            # 3. Training vs Validation Plot
+            wandb.log({
+                "plots/train_val_metrics": wandb.plot.line_series(
+                    xs=[epoch],
+                    ys=[[train_losses['total']], [val_acc]],
+                    keys=['Training Loss', 'Validation Accuracy'],
+                    title='Training vs Validation',
+                    xname='Epoch'
+                )
+            })
+            
+            # 4. Loss Composition Bar Plot
+            wandb.log({
+                "plots/loss_composition": wandb.plot.bar(
+                    wandb.Table(
+                        columns=["Loss Type", "Value"],
+                        data=[
+                            ["Adapter", train_losses['adapter']],
+                            ["GNN", train_losses['gnn']]
+                        ]
+                    ),
+                    "Loss Type",
+                    "Value",
+                    title="Loss Components"
+                )
+            })
             
             if val_acc > best_val_acc:
                 print(f"Validation accuracy improved from {best_val_acc:.4f} to {val_acc:.4f}")
                 best_val_acc = val_acc
                 patience_counter = 0
                 best_checkpoint_path = self.save_checkpoint(val_acc)
+                
+                # Log best model to wandb
+                wandb.save(best_checkpoint_path)
             else:
                 patience_counter += 1
                 print(f"Validation accuracy did not improve. Patience: {patience_counter}/{self.config.clip_adapter_graph['patience']}")
@@ -340,4 +442,8 @@ class CLIPAdapterGraphTrainer:
         
         print(f"\nTraining completed. Best validation accuracy: {best_val_acc:.4f}")
         print(f"Best model saved at: {best_checkpoint_path}")
+        
+        # Close wandb run
+        wandb.finish()
+        
         return best_val_acc, best_checkpoint_path 

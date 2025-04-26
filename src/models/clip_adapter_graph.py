@@ -4,13 +4,15 @@ import torch.nn.functional as F
 import numpy as np
 import torch_geometric.nn as gnn
 from torch_geometric.utils import dense_to_sparse
+from torch_geometric.nn import knn_graph
 
 
 class CLIPAdapterGraph(nn.Module):
-    def __init__(self, reduction_factor=8, seed=42, device="cuda", gnn_hidden_dim=256, num_gnn_layers=2):
+    def __init__(self, reduction_factor=8, seed=42, device="cuda", gnn_hidden_dim=256, num_gnn_layers=2, k_neighbors=10):
         super().__init__()
         self.device = device
         self.reduction_factor = reduction_factor
+        self.k_neighbors = k_neighbors
         # Get CLIP embedding dimension
         self.clip_dim = 512
         self.gnn_hidden_dim = gnn_hidden_dim
@@ -60,36 +62,16 @@ class CLIPAdapterGraph(nn.Module):
         #torch.backends.cudnn.benchmark = False
     
     def create_adjacency_matrix(self, features):
-        """
-        Create adjacency matrix based on cosine similarity between node features
-        Args:
-            features: Node features [num_nodes, feature_dim]
-        Returns:
-            edge_index: Sparse adjacency matrix
-            edge_weight: Edge weights based on cosine similarity
-        """
+        """Create KNN graph from features."""
         # Ensure input is float32
         features = features.float()
         
-        # Compute cosine similarity matrix
-        features_norm = F.normalize(features, p=2, dim=1)
-        similarity_matrix = torch.mm(features_norm, features_norm.t())
+        # Compute KNN graph
+        edge_index = knn_graph(features, k=self.k_neighbors, batch=None)
         
-        # Remove self-loops and ensure positive weights
-        similarity_matrix.fill_diagonal_(0)
-        
-        # Apply ReLU to ensure positive weights and sparsity
-        similarity_matrix = F.relu(similarity_matrix)
-        
-        # Add small epsilon to avoid numerical instability
-        similarity_matrix = similarity_matrix + 1e-6
-        
-        # Row-normalize the similarity matrix
-        row_sum = similarity_matrix.sum(dim=-1, keepdim=True)
-        similarity_matrix = similarity_matrix / row_sum.clamp(min=1e-6)
-        
-        # Convert to sparse format
-        edge_index, edge_weight = dense_to_sparse(similarity_matrix)
+        # Calculate edge weights using cosine similarity
+        row, col = edge_index
+        edge_weight = F.cosine_similarity(features[row], features[col], dim=1)
         
         return edge_index, edge_weight
         

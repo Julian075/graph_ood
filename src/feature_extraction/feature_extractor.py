@@ -134,31 +134,44 @@ class FeatureExtractor:
 
         # Process each split directory
         for split_dir in os.listdir(data_dir):
+            # Skip hidden directories and .ipynb_checkpoints
+            if split_dir.startswith('.') or split_dir == '.ipynb_checkpoints':
+                continue
+                
             split_path = os.path.join(data_dir, split_dir)
-            if os.path.isdir(split_path):
-                # Initialize lists for this split
-                all_features = []
-                all_labels = []
-                all_paths = []
-                
-                # Process each class directory
-                for class_dir in os.listdir(split_path):
-                    class_path = os.path.join(split_path, class_dir)
-                    if os.path.isdir(class_path):
-                        image_paths, labels = self.get_image_paths_and_labels(class_path)
-                        if image_paths:
-                            features = self.extract_from_paths(image_paths)
-                            all_features.append(features)
-                            all_labels.extend(labels)
-                            all_paths.extend(image_paths)
-                
-                if all_features:  # If we found any features
-                    # Concatenate all features for this split
-                    result[split_dir] = {
-                        'features': torch.cat(all_features),
-                        'labels': all_labels,
-                        'paths': all_paths
-                    }
+            if not os.path.isdir(split_path):
+                continue
+
+            # Handle special cases for split names
+            split_name = split_dir
+            if split_dir == 'VOC2007' or split_dir == 'photo':
+                split_name = 'train'
+            elif split_dir in ['SUN09', 'LabelMe', 'Caltech101', 'sketch', 'cartoon', 'art_painting']:
+                split_name = f'test_{split_dir}'
+
+            # Initialize lists for this split
+            all_features = []
+            all_labels = []
+            all_paths = []
+            
+            # Process each class directory
+            for class_dir in os.listdir(split_path):
+                class_path = os.path.join(split_path, class_dir)
+                if os.path.isdir(class_path):
+                    image_paths, labels = self.get_image_paths_and_labels(class_path)
+                    if image_paths:
+                        features = self.extract_from_paths(image_paths)
+                        all_features.append(features)
+                        all_labels.extend(labels)
+                        all_paths.extend(image_paths)
+            
+            if all_features:  # If we found any features
+                # Concatenate all features for this split
+                result[split_name] = {
+                    'features': torch.cat(all_features),
+                    'labels': all_labels,
+                    'paths': all_paths
+                }
         
         if not result:
             raise ValueError(f"No valid data found in {data_dir}")

@@ -80,31 +80,73 @@ def parse_args():
     
     return args
 
-def main():
-    args = parse_args()
-
-    set_global_seed(args.seed)
-
+def create_config(args, num_classes=None):
+    """Create configuration object with consistent parameters across models"""
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # Load prompt templates
     if args.prompt_template.endswith('.json'):
         with open(args.prompt_template, 'r') as f:
             prompt_templates = json.load(f)
     else:
         prompt_templates = args.prompt_template
-    config = Config(args.feature_dir, args.feature_dir_ood, args.class_mapping, prompt_templates, args.use_synthetic_data, args.seed, device)
+    
+    # Base configuration
+    config = Config(
+        feature_dir=args.feature_dir,
+        feature_dir_ood=args.feature_dir_ood,
+        class_mapping=args.class_mapping,
+        prompt_templates=prompt_templates,
+        use_synthetic_data=args.use_synthetic_data,
+        seed=args.seed,
+        device=device,
+        num_classes=num_classes
+    )
+    
+    # Common training parameters
+    common_params = {
+        'learning_rate': 0.001,
+        'num_epochs': 100,
+        'batch_size': 32,
+        'temperature': 0.07,
+        'reduction_factor': 0.5,
+        'patience': 10
+    }
+    
+    # Model-specific configurations
+    config.clip_adapter = common_params.copy()
+    config.clip_adapter_graph = common_params.copy()
+    config.clip_adapter_graph_simple = common_params.copy()
+    config.clip_adapter_ood = common_params.copy()
+    
+    # Add GNN-specific parameters
+    config.clip_adapter_graph.update({
+        'gnn_hidden_dim': 512,
+        'num_gnn_layers': 2
+    })
+    
+    return config
+
+def main():
+    args = parse_args()
+    set_global_seed(args.seed)
     
     # Get classes from training directory
     print("\nGetting classes from training directory...")
     if args.input_dir.endswith('VLCS') or args.input_dir.endswith('PACS'):
-        folder=os.listdir(args.input_dir)
+        folder = os.listdir(args.input_dir)
         train_folder = os.path.join(args.input_dir, folder[0])
     else:
         train_folder = os.path.join(args.input_dir, "train")
     classes = get_classes_from_folder(train_folder, args.class_mapping)
     print(f"Found {len(classes)} classes")
+    
     if args.OOD_test:
         classes_ood = get_classes_from_folder(args.input_dir_ood, args.class_mapping)
         print(f"Found {len(classes_ood)} classes in OOD dataset")
+    
+    # Create configuration after getting classes
+    config = create_config(args, num_classes=len(classes))
     
     if args.mode == 'generate':
         # Create output directory if it doesn't exist
@@ -130,7 +172,7 @@ def main():
                 output_folder=args.synthetic_dir,
                 classes=classes,
                 images_per_class=args.images_per_class,
-                prompt_templates=prompt_templates,
+                prompt_templates=args.prompt_templates,
                 seed=args.seed,
                 start_idx=args.start_idx,
                 end_idx=args.end_idx
@@ -150,33 +192,22 @@ def main():
         if not os.path.isdir(args.feature_dir):
             os.makedirs(args.feature_dir, exist_ok=True)
             
-        features={}
         # Extract features 
-        feature_extractor = FeatureExtractor(classes=classes,device=config.device, model_name=config.clip_model, batch_size=32)
+        feature_extractor = FeatureExtractor(classes=classes, device=config.device, model_name=config.clip_model, batch_size=32)
 
         print('extracting features')
-        for split_folder in os.listdir(args.input_dir):
-            # Skip hidden directories and .ipynb_checkpoints
-            if split_folder.startswith('.') or split_folder == '.ipynb_checkpoints':
-                continue
-                
-            split_folder_path = os.path.join(args.input_dir, split_folder)
-            if os.path.isdir(split_folder_path):
-                if split_folder == 'VOC2007' or split_folder == 'photo':
-                    split_folder='train'
-                elif split_folder == 'SUN09' or split_folder == 'LabelMe' or split_folder == 'Caltech101' or split_folder == 'sketch' or split_folder == 'cartoon' or split_folder == 'art_painting':
-                    split_folder='test_{split_folder}'
-                features[split_folder] = feature_extractor.process_directory(split_folder_path)
+        # Process main directory
+        features = feature_extractor.process_directory(args.input_dir)
         torch.save(features, os.path.join(args.feature_dir, 'real_data.pt'))
 
         if args.use_synthetic_data:
             print('extracting features from synthetic data')
             if os.path.isdir(args.synthetic_dir):
-                    features_synthetic = feature_extractor.process_directory(args.synthetic_dir)
-                    torch.save(features_synthetic, os.path.join(args.feature_dir, 'synthetic_features.pt'))
+                synthetic_features = feature_extractor.process_directory(args.synthetic_dir)
+                torch.save(synthetic_features, os.path.join(args.feature_dir, 'synthetic_features.pt'))
             if os.path.isdir(args.synthetic_dir2):
-                    features_synthetic2 = feature_extractor.process_directory(args.synthetic_dir2)
-                    torch.save(features_synthetic2, os.path.join(args.feature_dir, 'synthetic_features_diverse.pt'))
+                synthetic_features2 = feature_extractor.process_directory(args.synthetic_dir2)
+                torch.save(synthetic_features2, os.path.join(args.feature_dir, 'synthetic_features_diverse.pt'))
     elif args.mode == 'clip_test':
         clip_evaluator = ClipEvaluator(classes=classes, config=config)
         clip_evaluator.evaluate()

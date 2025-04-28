@@ -89,6 +89,8 @@ class Config:
         }
         self.clip_adapter_graph_simple = {
             "patience": 5,
+            "gnn_hidden_dim": 256,
+            "num_gnn_layers": 2,
             "reduction_factor": 2,
             "learning_rate": 1e-2,
             "batch_size": 128,

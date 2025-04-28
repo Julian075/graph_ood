@@ -4,6 +4,7 @@
 *.pt
 *.out
 *.txt
+*.sh
 !requeriments.txt
 *.err
 *.tar.gz

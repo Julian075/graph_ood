@@ -136,13 +136,28 @@ class FeatureExtractor:
         for split_dir in os.listdir(data_dir):
             split_path = os.path.join(data_dir, split_dir)
             if os.path.isdir(split_path):
-                image_paths, labels = self.get_image_paths_and_labels(split_path)
-                if image_paths:
-                    features = self.extract_from_paths(image_paths)
+                # Initialize lists for this split
+                all_features = []
+                all_labels = []
+                all_paths = []
+                
+                # Process each class directory
+                for class_dir in os.listdir(split_path):
+                    class_path = os.path.join(split_path, class_dir)
+                    if os.path.isdir(class_path):
+                        image_paths, labels = self.get_image_paths_and_labels(class_path)
+                        if image_paths:
+                            features = self.extract_from_paths(image_paths)
+                            all_features.append(features)
+                            all_labels.extend(labels)
+                            all_paths.extend(image_paths)
+                
+                if all_features:  # If we found any features
+                    # Concatenate all features for this split
                     result[split_dir] = {
-                        'features': features,
-                        'labels': labels,
-                        'paths': image_paths
+                        'features': torch.cat(all_features),
+                        'labels': all_labels,
+                        'paths': all_paths
                     }
         
         if not result:

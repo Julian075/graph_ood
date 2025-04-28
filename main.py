@@ -181,67 +181,8 @@ def main():
         clip_evaluator = ClipEvaluator(classes=classes, config=config)
         clip_evaluator.evaluate()
     elif args.mode == 'train_clip_adapter':
-        if args.hyperparameter_search:
-            search_space = config.clip_adapter['search_space']
-            
-            # Convert config search spaces to SearchSpace objects
-            search_spaces = []
-            for param_name, param_config in search_space['search_spaces'].items():
-                search_spaces.append(
-                    SearchSpace(
-                        name=param_name,
-                        type=param_config['type'],
-                        range=param_config['range'],
-                        log_scale=param_config.get('log_scale', False)
-                    )
-                )
-            
-            # Initialize random search
-            random_search = RandomSearch(
-                search_spaces=search_spaces,
-                n_trials=search_space['n_trials'],
-                metric_name=search_space['metric_name'],
-                maximize=search_space['maximize'],
-                seed=config.clip_adapter['seed']
-            )
-            
-            # Define training function for hyperparameter search
-            def train_with_params(params):
-                # Update config with new parameters
-                current_config = copy.deepcopy(config)
-                for param_name, param_value in params.items():
-                    current_config.clip_adapter[param_name] = param_value
-                
-                # Initialize model and trainer with current parameters
-                clip_adapter = CLIPAdapter(
-                    reduction_factor=current_config.clip_adapter['reduction_factor'],
-                    device=current_config.device
-                )
-                clip_trainer = CLIPAdapterTrainer(clip_adapter, current_config)
-                
-                # Train and return validation accuracy
-                val_acc = clip_trainer.train(classes_names=classes)
-                return val_acc
-            
-            # Run hyperparameter search
-            print("\nStarting hyperparameter search...")
-            best_params = random_search.search(
-                train_fn=train_with_params,
-                output_dir=os.path.join(config.output_dir, 'clip_adapter', 'hyperparameter_search'),
-                verbose=True
-            )
-            
-            # Train final model with best parameters
-            print("\nTraining final model with best parameters...")
-            for param_name, param_value in best_params.items():
-                config.clip_adapter[param_name] = param_value
-                
-            clip_adapter = CLIPAdapter(config.clip_adapter['reduction_factor'], config.clip_adapter['seed'], config.device)
-            clip_trainer = CLIPAdapterTrainer(clip_adapter, config)
-            clip_trainer.train(classes_names=classes)
-        else:
-            clip_trainer = CLIPAdapterTrainer(config)
-            best_val_acc, checkpoint_path = clip_trainer.train(classes_names=classes)
+        clip_trainer = CLIPAdapterTrainer(config)
+        best_val_acc, checkpoint_path = clip_trainer.train(classes_names=classes)
         
         # Test phase
         clip_adapter = CLIPAdapter(config.clip_adapter['reduction_factor'], config.clip_adapter['seed'], config.device)
@@ -257,80 +198,16 @@ def main():
         results = clip_evaluator.evaluate()
         print(f"\nBest validation accuracy achieved: {best_val_acc:.4f}")
     elif args.mode == 'train_clip_adapter_graph':
-        if args.hyperparameter_search:
-            search_space = config.clip_adapter['search_space']
-            
-            # Convert config search spaces to SearchSpace objects
-            search_spaces = []
-            for param_name, param_config in search_space['search_spaces'].items():
-                search_spaces.append(
-                    SearchSpace(
-                        name=param_name,
-                        type=param_config['type'],
-                        range=param_config['range'],
-                        log_scale=param_config.get('log_scale', False)
-                    )
-                )
-            
-            # Initialize random search
-            random_search = RandomSearch(
-                search_spaces=search_spaces,
-                n_trials=search_space['n_trials'],
-                metric_name=search_space['metric_name'],
-                maximize=search_space['maximize'],
-                seed=config.clip_adapter['seed']
-            )
-            
-            # Define training function for hyperparameter search
-            def train_with_params(params):
-                # Update config with new parameters
-                current_config = copy.deepcopy(config)
-                for param_name, param_value in params.items():
-                    current_config.clip_adapter[param_name] = param_value
-                
-                # Initialize model and trainer with current parameters
-                clip_adapter_graph = CLIPAdapterGraph(
-                    reduction_factor=current_config.clip_adapter_graph['reduction_factor'],
-                    seed=current_config.clip_adapter_graph['seed'],
-                    device=current_config.device
-                )
-                clip_trainer = CLIPAdapterGraphTrainer(current_config)
-                
-                # Train and return validation accuracy
-                val_acc = clip_trainer.train(classes_names=classes)
-                return val_acc
-            
-            # Run hyperparameter search
-            print("\nStarting hyperparameter search...")
-            best_params = random_search.search(
-                train_fn=train_with_params,
-                output_dir=os.path.join(config.output_dir, 'clip_adapter_graph', 'hyperparameter_search'),
-                verbose=True
-            )
-            
-            # Train final model with best parameters
-            print("\nTraining final model with best parameters...")
-            for param_name, param_value in best_params.items():
-                config.clip_adapter_graph[param_name] = param_value
-                
-            clip_adapter_graph = CLIPAdapterGraph(
-                reduction_factor=config.clip_adapter_graph['reduction_factor'],
-                seed=config.clip_adapter_graph['seed'],
-                device=config.device
-            )
-            clip_trainer = CLIPAdapterGraphTrainer(config)
-            clip_trainer.train(classes_names=classes)
-        else:
-            clip_trainer = CLIPAdapterGraphTrainer(config)
-            best_val_acc, checkpoint_path = clip_trainer.train(classes_names=classes)
+        clip_trainer = CLIPAdapterGraphTrainer(config)
+        best_val_acc, checkpoint_path = clip_trainer.train(classes_names=classes)
         
         # Test phase
         clip_adapter_graph = CLIPAdapterGraph(
-            reduction_factor=config.clip_adapter_graph['reduction_factor'],
-            seed=config.clip_adapter_graph['seed'],
+            reduction_factor=config.clip_adapter['reduction_factor'],
+            seed=config.clip_adapter['seed'],
             device=config.device,
-            gnn_hidden_dim=config.clip_adapter_graph['gnn_hidden_dim'],
-            num_gnn_layers=config.clip_adapter_graph['num_gnn_layers']
+            gnn_hidden_dim=config.clip_adapter['gnn_hidden_dim'],
+            num_gnn_layers=config.clip_adapter['num_gnn_layers']
         )
         if args.OOD_test:
             clip_evaluator = ClipAdapterGraphEvaluator(model=clip_adapter_graph, classes=classes_ood, ood_test=True, config=config, checkpoint_path=checkpoint_path)
@@ -345,63 +222,8 @@ def main():
         print(f"\nBest validation accuracy achieved: {best_val_acc:.4f}")
     elif args.mode == 'train_clip_adapter_ood':
         config.num_classes = len(classes)
-        if args.hyperparameter_search:
-            search_space = config.clip_adapter_ood['search_space']
-            
-            # Convert config search spaces to SearchSpace objects
-            search_spaces = []
-            for param_name, param_config in search_space['search_spaces'].items():
-                search_spaces.append(
-                    SearchSpace(
-                        name=param_name,
-                        type=param_config['type'],
-                        range=param_config['range'],
-                        log_scale=param_config.get('log_scale', False)
-                    )
-                )
-            
-            # Initialize random search
-            random_search = RandomSearch(
-                search_spaces=search_spaces,
-                n_trials=search_space['n_trials'],
-                metric_name=search_space['metric_name'],
-                maximize=search_space['maximize'],
-                seed=config.clip_adapter_ood['seed']
-            )
-            
-            # Define training function for hyperparameter search
-            def train_with_params(params):
-                # Update config with new parameters
-                current_config = copy.deepcopy(config)
-                for param_name, param_value in params.items():
-                    current_config.clip_adapter_ood[param_name] = param_value
-                
-                # Initialize trainer with current parameters
-                clip_trainer = CLIPAdapterOODTrainer(current_config)
-                
-                # Train and return validation accuracy
-                val_acc = clip_trainer.train(classes_names=classes)
-                return val_acc
-            
-            # Run hyperparameter search
-            print("\nStarting hyperparameter search...")
-            best_params = random_search.search(
-                train_fn=train_with_params,
-                output_dir=os.path.join(config.output_dir, 'clip_adapter_ood', 'hyperparameter_search'),
-                verbose=True
-            )
-            
-            # Train final model with best parameters
-            print("\nTraining final model with best parameters...")
-            for param_name, param_value in best_params.items():
-                config.clip_adapter_ood[param_name] = param_value
-                
-            clip_trainer = CLIPAdapterOODTrainer(config)
-            clip_trainer.train(classes_names=classes)
-        else:
-            # Initialize trainer
-            clip_trainer = CLIPAdapterOODTrainer(config)
-            best_val_acc, checkpoint_path = clip_trainer.train(classes_names=classes)
+        clip_trainer = CLIPAdapterOODTrainer(config)
+        best_val_acc, checkpoint_path = clip_trainer.train(classes_names=classes)
         
         # Test phase
         if args.OOD_test:
@@ -416,70 +238,14 @@ def main():
         results = clip_evaluator.evaluate()
         print(f"\nBest validation accuracy achieved: {best_val_acc:.4f}")
     elif args.mode == 'train_clip_adapter_graph_simple':
-        if args.hyperparameter_search:
-            search_space = config.clip_adapter_graph['search_space']
-            
-            # Convert config search spaces to SearchSpace objects
-            search_spaces = []
-            for param_name, param_config in search_space['search_spaces'].items():
-                search_spaces.append(
-                    SearchSpace(
-                        name=param_name,
-                        type=param_config['type'],
-                        range=param_config['range'],
-                        log_scale=param_config.get('log_scale', False)
-                    )
-                )
-            
-            # Initialize random search
-            random_search = RandomSearch(
-                search_spaces=search_spaces,
-                n_trials=search_space['n_trials'],
-                metric_name=search_space['metric_name'],
-                maximize=search_space['maximize'],
-                seed=config.clip_adapter_graph['seed']
-            )
-            
-            # Define training function for hyperparameter search
-            def train_with_params(params):
-                # Update config with new parameters
-                current_config = copy.deepcopy(config)
-                for param_name, param_value in params.items():
-                    current_config.clip_adapter_graph[param_name] = param_value
-                
-                # Initialize trainer with current parameters
-                clip_trainer = CLIPAdapterGraphSimpleTrainer(current_config)
-                
-                # Train and return validation accuracy
-                val_acc = clip_trainer.train(classes_names=classes)
-                return val_acc
-            
-            # Run hyperparameter search
-            print("\nStarting hyperparameter search...")
-            best_params = random_search.search(
-                train_fn=train_with_params,
-                output_dir=os.path.join(config.output_dir, 'clip_adapter_graph_simple', 'hyperparameter_search'),
-                verbose=True
-            )
-            
-            # Train final model with best parameters
-            print("\nTraining final model with best parameters...")
-            for param_name, param_value in best_params.items():
-                config.clip_adapter_graph[param_name] = param_value
-            
-            clip_trainer = CLIPAdapterGraphSimpleTrainer(config)
-            clip_trainer.train(classes_names=classes)
-        else:
-            clip_trainer = CLIPAdapterGraphSimpleTrainer(config)
-            best_val_acc, checkpoint_path = clip_trainer.train(classes_names=classes)
+        clip_trainer = CLIPAdapterGraphSimpleTrainer(config)
+        best_val_acc, checkpoint_path = clip_trainer.train(classes_names=classes)
         
         # Test phase
         clip_adapter_graph = CLIPAdapterGraphSimple(
             reduction_factor=config.clip_adapter_graph['reduction_factor'],
-            device=config.device,
-            gnn_hidden_dim=config.clip_adapter_graph['gnn_hidden_dim'],
-            num_gnn_layers=config.clip_adapter_graph['num_gnn_layers'],
-            seed=config.clip_adapter_graph['seed']
+            seed=config.clip_adapter_graph['seed'],
+            device=config.device
         )
         
         if args.OOD_test:

@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GCNConv
+from torch_geometric.nn.pool import knn_graph
+import numpy as np
 
 class CLIPAdapterGraphSimple(nn.Module):
     def __init__(
@@ -10,7 +12,9 @@ class CLIPAdapterGraphSimple(nn.Module):
         device="cuda",
         gnn_hidden_dim=256,
         num_gnn_layers=2,
-        seed=None
+        seed=None,
+        k_neighbors=10,
+        num_classes=46
     ):
         super().__init__()
         
@@ -21,31 +25,63 @@ class CLIPAdapterGraphSimple(nn.Module):
         self.reduction_factor = reduction_factor
         self.gnn_hidden_dim = gnn_hidden_dim
         self.num_gnn_layers = num_gnn_layers
+        self.k_neighbors = k_neighbors
         
-        # CLIP feature dimension (assuming standard CLIP model)
-        self.clip_feature_dim = 768
-        
+       
+        self.clip_feature_dim = 512
+        # Calculate bottleneck dimension
+        self.bottleneck_dim = self.clip_feature_dim // reduction_factor
+        #parameter
+        self.alpha = nn.Parameter(torch.tensor(0.5)) 
         # Adapter layers
-        self.down_proj = nn.Linear(self.clip_feature_dim, self.clip_feature_dim // self.reduction_factor)
-        self.up_proj = nn.Linear(self.clip_feature_dim // self.reduction_factor, self.clip_feature_dim)
+        self.down_proj = nn.Linear(self.clip_feature_dim, self.bottleneck_dim)
+        self.up_proj = nn.Linear(self.bottleneck_dim, self.clip_feature_dim)
         
         # GNN layers
+        self.num_classes = num_classes
+
         self.gnn_layers = nn.ModuleList()
         
-        # First GNN layer (input layer)
-        self.gnn_layers.append(GCNConv(self.clip_feature_dim, self.gnn_hidden_dim))
-        
-        # Hidden GNN layers
+        if self.num_gnn_layers >  1:
+            self.gnn_layers.append(GCNConv(self.clip_feature_dim, self.gnn_hidden_dim))
         for _ in range(num_gnn_layers - 2):
             self.gnn_layers.append(GCNConv(self.gnn_hidden_dim, self.gnn_hidden_dim))
+        if self.num_gnn_layers > 1:
+            self.gnn_layers.append(GCNConv(self.gnn_hidden_dim, self.num_classes))
+        else:
+            self.gnn_layers.append(GCNConv(self.clip_feature_dim, self.num_classes))
+
         
-        # Last GNN layer (output layer)
-        self.gnn_layers.append(GCNConv(self.gnn_hidden_dim, self.clip_feature_dim))
+        self.set_seed(seed)
         
         self.to(device)
 
-    def forward(self, x, edge_index=None, edge_weight=None):
+    def set_seed(self, seed):
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
+        np.random.seed(seed)
+        #torch.backends.cudnn.deterministic = True
+        #torch.backends.cudnn.benchmark = False
+
+    def create_adjacency_matrix(self, features):
+        """Create KNN graph from features."""
+        # Ensure input is float32
+        features = features.float()
+        
+        # Compute KNN graph
+        edge_index = knn_graph(features, k=self.k_neighbors, batch=None)
+        
+        # Calculate edge weights using cosine similarity
+        row, col = edge_index
+        edge_weight = F.cosine_similarity(features[row], features[col], dim=1)
+        
+        return edge_index, edge_weight
+
+    def forward(self, x, training=True):
         # Apply adapter
+        x=x.float()
         identity = x
         x = self.down_proj(x)
         x = F.relu(x)
@@ -53,14 +89,19 @@ class CLIPAdapterGraphSimple(nn.Module):
         
         # Add residual connection
         x = x + identity
+        x= self.alpha * x + (1 - self.alpha) * identity
+        #x=F.normalize(x, dim=1)
         
         # If edge_index is provided, apply GNN layers
-        if edge_index is not None:
+        if training:
+            adapter_output = x
+            edge_index, edge_weight = self.create_adjacency_matrix(x)
             # Apply GNN layers
-            for i, gnn_layer in enumerate(self.gnn_layers):
+            for _, gnn_layer in enumerate(self.gnn_layers[:-1]):
                 x = gnn_layer(x, edge_index, edge_weight)
-                # Apply ReLU to all but the last layer
-                if i < len(self.gnn_layers) - 1:
-                    x = F.relu(x)
-        
-        return x 
+                x = F.relu(x)
+            x = self.gnn_layers[-1](x, edge_index, edge_weight)
+            x = F.softmax(x, dim=1)
+            return adapter_output, x 
+        else:
+            return x, x

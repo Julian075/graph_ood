@@ -1,13 +1,18 @@
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
 import os
 from tqdm import tqdm
-import clip
-from typing import List
 from src.models.clip_adapter import CLIPAdapter
-import numpy as np
+import clip
 import wandb
+from .utils import (
+    encode_text,
+    compute_contrastive_loss,
+    set_seed,
+    save_checkpoint,
+    load_data,
+    prepare_dataloaders
+)
 
 class CLIPAdapterTrainer:
     def __init__(self, config):
@@ -18,6 +23,7 @@ class CLIPAdapterTrainer:
         self.feature_dir = config.feature_dir
         self.prompt_template = config.prompt_template
         self.use_synthetic_data = config.use_synthetic_data
+        self.name_model = 'clip_adapter'
         
         # Get Weights & Biases token from environment
         wandb_token = os.getenv('WANDB_TOKEN')
@@ -52,102 +58,15 @@ class CLIPAdapterTrainer:
         self.clip, _ = clip.load(config.clip_model, device=config.device)
         self.clip.eval()  # Set to eval mode to freeze parameters
 
-    
-    def encode_text(self, text_prompts: List[str], normalize: bool = True) -> torch.Tensor:
-        """Encode text prompts using CLIP with explicit precision handling"""
-        with torch.no_grad():
-            text_tokens = clip.tokenize(text_prompts).to(self.device)
-            text_features = self.clip.encode_text(text_tokens).float()  # Ensure float32
-            if normalize:
-                text_features = F.normalize(text_features, dim=-1)
-        return text_features
-        
-    def compute_cross_entropy_loss(self, image_features, text_features, labels):
-        """
-        Compute standard cross entropy loss between image and text features.
-        
-        Args:
-            image_features: Tensor of shape [batch_size, feature_dim]
-            text_features: Tensor of shape [num_classes, feature_dim]
-            labels: Tensor of shape [batch_size] containing class indices
-        """
-        # Compute similarity scores
-        logits = torch.matmul(image_features, text_features.T)/self.temperature
-        
-        # Apply temperature scaling
-       # logits = logits * self.model.logit_scale_CLIP
-        
-        # Use standard cross entropy loss
-        loss = F.cross_entropy(logits, labels)
-        return loss
-    
-    def compute_contrastive_loss(self, image_features, text_features, labels):
-        """
-   
-        Args:
-            image_features: Tensor of shape [batch_size, feature_dim]
-            text_features: Tensor of shape [num_classes, feature_dim]
-            labels: Tensor of shape [batch_size] containing class indices
-        """
-        # Compute similarity matrix
-        logits = torch.matmul(image_features, text_features.T) #* self.model.logit_scale_CLIP)  # [batch_size, num_classes]
-        logits= F.normalize(logits, dim=-1)
-        # Scale logits by temperature
-        logits = logits / self.temperature
-        
-        # Get positive pair logits using the labels
-        positive_logits = logits[torch.arange(logits.size(0)), labels]  # [batch_size]
-        
-        # Compute exp(logits) for all pairs
-        exp_logits = torch.exp(logits)  # [batch_size, num_classes]
-        
-        # Sum exp(logits) for denominator
-        sum_exp_logits = exp_logits.sum(dim=1)  # [batch_size]
-        
-        # Compute log(exp(pos_logits) / sum(exp(logits))) = pos_logits - log(sum(exp(logits)))
-        loss = -positive_logits + torch.log(sum_exp_logits)
-        
-        # Average over the batch
-        return loss.mean()
-    
-    def prepare_data(self, data, batch_size, class_to_idx):
-        """
-        Prepare data loaders for training/validation.
-        
-        Args:
-            data: Dictionary containing:
-                - features: Tensor of shape [N, feature_dim]
-                - labels: List or Tensor of labels
-                - paths: List of image paths
-            batch_size: Batch size for the dataloader
-            class_to_idx: Dictionary mapping class names to indices
-        """
-        # Convert labels to indices if they're not already
-        labels = data['labels']
-        if isinstance(labels, list):
-            # Convert labels to indices
-            label_indices = [class_to_idx[str(label) if isinstance(label, tuple) else label] for label in labels]
-            labels = torch.tensor(label_indices)
-        elif isinstance(labels, torch.Tensor) and labels.dtype != torch.int64:
-            # If tensor but not indices, convert to indices
-            label_indices = [class_to_idx[str(label.item())] for label in labels]
-            labels = torch.tensor(label_indices)
-            
-        # Create dataset with features and labels
-        dataset = TensorDataset(
-            data['features'],
-            labels,
-            torch.arange(len(data['paths']))  # Create indices for paths lookup
-        )
-        
-        dataloader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            pin_memory=True
-        )
-        return dataloader, data['paths']  # Return paths separately for reference
-    
+    def process_batch(self, features, labels):
+        """Common processing for training and validation batches"""
+        features = features.to(self.device).float()
+        labels = labels.to(self.device)
+        features = F.normalize(features, dim=-1)
+        output = self.model(features)
+        output = F.normalize(output, dim=-1)
+        return output, labels
+
     def train_epoch(self, train_loader, text_features):
         """Train for one epoch with explicit precision handling."""
         self.model.train()
@@ -155,27 +74,11 @@ class CLIPAdapterTrainer:
         num_batches = 0
         
         for batch_features, batch_labels, _ in tqdm(train_loader, desc="Training"):
-            # Move batch to device and ensure float32
-            batch_features = batch_features.to(self.device).float()
-            batch_labels = batch_labels.to(self.device)
+            output, batch_labels = self.process_batch(batch_features, batch_labels)
+            loss = compute_contrastive_loss(output, text_features, batch_labels, self.temperature)
             
-            # Normalize input features
-            batch_features = F.normalize(batch_features, dim=-1)
-            
-            # Forward pass
-            adapted_features = self.model(batch_features)
-            adapted_features = F.normalize(adapted_features, dim=-1)
-            
-            # Compute loss
-            loss = self.compute_contrastive_loss(adapted_features, text_features, batch_labels)
-            
-            # Backward pass
             self.optimizer.zero_grad()
             loss.backward()
-            
-            # Optional gradient clipping
-            #torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            
             self.optimizer.step()
             
             total_loss += loss.item()
@@ -184,9 +87,9 @@ class CLIPAdapterTrainer:
             # Log batch metrics
             wandb.log({
                 "batch_loss": loss.item(),
-                "batch_features_norm": torch.norm(adapted_features).item(),
-                "batch_features_mean": adapted_features.mean().item(),
-                "batch_features_std": adapted_features.std().item()
+                "batch_features_norm": torch.norm(output).item(),
+                "batch_features_mean": output.mean().item(),
+                "batch_features_std": output.std().item()
             })
         
         return total_loss / num_batches if num_batches > 0 else float('nan')
@@ -194,135 +97,35 @@ class CLIPAdapterTrainer:
     def validate(self, val_loader, text_features):
         """Validate the model with explicit precision handling."""
         self.model.eval()
-        correct = 0
-        total = 0
+        correct = total = 0
         
         with torch.no_grad():
             for batch_features, batch_labels, _ in tqdm(val_loader, desc="Validating"):
-                # Move batch to device and ensure float32
-                batch_features = batch_features.to(self.device).float()
-                batch_labels = batch_labels.to(self.device)
-                
-                # Normalize input features
-                batch_features = F.normalize(batch_features, dim=-1)
-                
-                # Forward pass
-                adapted_features = self.model(batch_features)
-                adapted_features = F.normalize(adapted_features, dim=-1)
-                
-                similarity = torch.matmul(adapted_features, text_features.T)
-                similarity = F.normalize(similarity, dim=-1)
-                
+                output, batch_labels = self.process_batch(batch_features, batch_labels)
+                similarity = torch.matmul(output, text_features.T)
                 predictions = torch.argmax(similarity, dim=1)
                 correct += (predictions == batch_labels).sum().item()
                 total += len(batch_labels)
         
-        accuracy = correct / total
-        return accuracy
-    
-    def save_checkpoint(self, val_acc):
-        """Save model checkpoint with accuracy in filename."""
-        checkpoint = {
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'val_acc': val_acc,
-            'config': self.config
-        }
-        
-        # Format accuracy for filename
-        acc_str = f"{val_acc:.2f}".replace(".", "_")
-        
-        if self.use_synthetic_data:
-            checkpoint_path = os.path.join(
-                self.config.output_dir, 'clip_adapter',
-                f'adapter_checkpoint_synthetic_acc_{acc_str}.pt'
-            )
-        else:
-            checkpoint_path = os.path.join(
-                self.config.output_dir, 'clip_adapter',
-                f'adapter_checkpoint_acc_{acc_str}.pt'
-            )
-        
-        # Create directory if it doesn't exist
-        os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-        torch.save(checkpoint, checkpoint_path)
-        return checkpoint_path  # Return the path for reference
-        
-    def load_checkpoint(self, checkpoint_path):
-        """Load model checkpoint."""
-        checkpoint = torch.load(checkpoint_path, weights_only=False)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        return checkpoint['val_acc']
-    
-    def set_seed(self, seed):
-        """Set seed for reproducibility with additional settings."""
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed(seed)
-            torch.cuda.manual_seed_all(seed)
-        np.random.seed(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        return correct / total
     
     def train(self, classes_names):
-        """
-        Main training loop with early stopping.
-        
-        Returns:
-            tuple: (best_val_acc, checkpoint_path)
-        """
-        # Load features from the feature directory
-        self.set_seed(self.seed)
-
+        """Main training loop with early stopping."""
+        set_seed(self.seed)
         unique_classes = sorted({class_name for _, class_name in classes_names})
         class_to_idx = {class_name: idx for idx, class_name in enumerate(unique_classes)}
 
-        feature_file = os.path.join(self.feature_dir, "real_data.pt")
-        if not os.path.exists(feature_file):
-            raise FileNotFoundError(f"Feature file not found at {feature_file}")
-        all_data = torch.load(feature_file)
-        if self.use_synthetic_data:
-            feature_file_synthetic = os.path.join(self.feature_dir, "synthetic_features.pt")
-            if not os.path.exists(feature_file_synthetic):
-                raise FileNotFoundError(f"Feature file not found at {feature_file_synthetic}")
-            all_data_synthetic = torch.load(feature_file_synthetic)
-            all_data['train']['features'] = torch.cat([all_data['train']['features'], all_data_synthetic['features']])
-            
-            # Convert labels to indices first, then to tensors
-            if isinstance(all_data['train']['labels'], list):
-                train_label_indices = [class_to_idx[str(label) if isinstance(label, tuple) else label] for label in all_data['train']['labels']]
-                all_data['train']['labels'] = torch.tensor(train_label_indices)
-            
-            if isinstance(all_data_synthetic['labels'], list):
-                synthetic_label_indices = [class_to_idx[str(label) if isinstance(label, tuple) else label] for label in all_data_synthetic['labels']]
-                all_data_synthetic['labels'] = torch.tensor(synthetic_label_indices)
-            
-            all_data['train']['labels'] = torch.cat([all_data['train']['labels'], all_data_synthetic['labels']])
-            all_data['train']['paths'] = all_data['train']['paths'] + all_data_synthetic['paths']
+        # Load and prepare data
+        all_data = load_data(self.feature_dir, self.use_synthetic_data, class_to_idx)
+        train_loader, val_loader = prepare_dataloaders(
+            all_data, 
+            self.config.clip_adapter['batch_size'],
+            class_to_idx
+        )
 
-        # Get train and val splits
-        train_features = all_data['train']['features']
-        train_labels = all_data['train']['labels']
-        val_features = all_data['val']['features']
-        val_labels = all_data['val']['labels']
-
-        print("\nStarting training...")
-        print(f"Training samples: {len(train_features)}")
-        print(f"Validation samples: {len(val_features)}")
+        print(f"\nStarting training...\nTraining samples: {len(all_data['train']['features'])}\nValidation samples: {len(all_data['val']['features'])}")
         
-        # Prepare data loaders
-        train_loader, train_paths = self.prepare_data(
-            {'features': train_features, 'labels': train_labels, 'paths': all_data['train']['paths']}, 
-            self.config.clip_adapter['batch_size'],
-            class_to_idx
-        )
-        val_loader, val_paths = self.prepare_data(
-            {'features': val_features, 'labels': val_labels, 'paths': all_data['val']['paths']}, 
-            self.config.clip_adapter['batch_size'],
-            class_to_idx
-        )
-
+        # Prepare text features
         templates = [self.prompt_template] if isinstance(self.prompt_template, str) else self.prompt_template
         all_text_features = []
         with torch.no_grad():
@@ -332,7 +135,7 @@ class CLIPAdapterTrainer:
                 
                 for i in range(0, len(prompts), self.config.clip_adapter['batch_size']):
                     batch_prompts = prompts[i:i + self.config.clip_adapter['batch_size']]
-                    batch_features = self.encode_text(batch_prompts)
+                    batch_features = encode_text(self.clip, self.device, batch_prompts)
                     text_features.append(batch_features)
                 
                 # Concatenate and normalize features for this template
@@ -349,25 +152,19 @@ class CLIPAdapterTrainer:
 
         # Ensure text features are float32
         text_features = text_features.float()
-        #print(f"\nText features dtype: {text_features.dtype}")
-        #print(f"Text features shape: {text_features.shape}")
-        #print(f"Text features stats - min: {text_features.min().item():.4f}, max: {text_features.max().item():.4f}")
-
+        
         # Training loop
-        best_val_acc = 0
-        patience_counter = 0
+        best_val_acc = patience_counter = 0
         best_checkpoint_path = None
         
         for epoch in range(self.config.clip_adapter['num_epochs']):
             print(f"\nEpoch {epoch + 1}/{self.config.clip_adapter['num_epochs']}")
             
             train_loss = self.train_epoch(train_loader, text_features)
-            print(f"Training loss: {train_loss:.4f}")
-            
             val_acc = self.validate(val_loader, text_features)
-            print(f"Validation accuracy: {val_acc:.4f}")
+            print(f"Training loss: {train_loss:.4f}\nValidation accuracy: {val_acc:.4f}")
             
-            # Log epoch metrics
+            # Log metrics
             wandb.log({
                 "epoch": epoch,
                 "train_loss": train_loss,
@@ -380,22 +177,23 @@ class CLIPAdapterTrainer:
                 print(f"Validation accuracy improved from {best_val_acc:.4f} to {val_acc:.4f}")
                 best_val_acc = val_acc
                 patience_counter = 0
-                best_checkpoint_path = self.save_checkpoint(val_acc)
-                
-                # Log best model to wandb
+                best_checkpoint_path = save_checkpoint(
+                    self.model,
+                    self.optimizer,
+                    val_acc,
+                    self.config,
+                    self.config.output_dir,
+                    self.name_model,
+                    self.use_synthetic_data
+                )
                 wandb.save(best_checkpoint_path)
             else:
                 patience_counter += 1
                 print(f"Validation accuracy did not improve. Patience: {patience_counter}/{self.config.clip_adapter['patience']}")
-            
-            if patience_counter >= self.config.clip_adapter['patience']:
-                print("\nEarly stopping triggered!")
-                break
+                if patience_counter >= self.config.clip_adapter['patience']:
+                    print("\nEarly stopping triggered!")
+                    break
         
-        print(f"\nTraining completed. Best validation accuracy: {best_val_acc:.4f}")
-        print(f"Best model saved at: {best_checkpoint_path}")
-        
-        # Close wandb run
+        print(f"\nTraining completed. Best validation accuracy: {best_val_acc:.4f}\nBest model saved at: {best_checkpoint_path}")
         wandb.finish()
-        
         return best_val_acc, best_checkpoint_path

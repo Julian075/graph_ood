@@ -58,13 +58,13 @@ class CLIPAdapter(nn.Module):
         x = self.up_proj(x)
         
         # Skip connection
-        adapted = x + residual
+        x = x + residual
         
         # Alpha interpolation
-        adapted = self.alpha * adapted + (1 - self.alpha) * residual
+        x = self.alpha * x + (1 - self.alpha) * residual
         
         # Final normalization
-        adapted = F.normalize(adapted, dim=-1)
+        #adapted = F.normalize(adapted, dim=-1)
         
         # Debug info
         #if torch.isnan(adapted).any():
@@ -73,4 +73,4 @@ class CLIPAdapter(nn.Module):
         #    print(f"Adapter output stats - min: {x.min().item():.4f}, max: {x.max().item():.4f}")
         #    print(f"Final output stats - min: {adapted.min().item():.4f}, max: {adapted.max().item():.4f}")
         
-        return adapted 
+        return x 

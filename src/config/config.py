@@ -9,13 +9,13 @@ class Config:
         self.device = device
         self.clip_model = "ViT-B/16"
         self.num_classes = num_classes
+        self.patience = 5
         self.clip_adapter = {
             "reduction_factor": 2,
             "learning_rate": 1e-2,
             "batch_size": 128,
             "temperature": 0.1,
-            "num_epochs": 107,
-            "patience": 5,
+            "num_epochs": 100,
             "seed": seed,
             "search_space": {
                 "n_trials": 20,
@@ -37,7 +37,7 @@ class Config:
             "learning_rate": 1e-2,
             "batch_size": 128,
             "temperature": 0.1,
-            "num_epochs": 107,
+            "num_epochs": 100,
             "gnn_hidden_dim": 256,
             "num_gnn_layers": 2,
             "seed": seed,
@@ -62,7 +62,7 @@ class Config:
             "learning_rate": 1e-2,
             "batch_size": 128,
             "temperature": 0.1,
-            "num_epochs": 107,
+            "num_epochs": 100,
             "gnn_hidden_dim": 256,
             "num_gnn_layers": 2,
             "contrastive_weight": 1.0,
@@ -87,3 +87,16 @@ class Config:
                 }
             }
         }
+        self.clip_adapter_graph_simple = {
+            "patience": 5,
+            "reduction_factor": 2,
+            "learning_rate": 1e-2,
+            "batch_size": 128,
+            "temperature": 0.1,
+            "num_epochs": 100,
+            "seed": seed,
+            "search_space": {
+                "n_trials": 20,
+                "metric_name": "accuracy",
+                "maximize": True,
+        }}

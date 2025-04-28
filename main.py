@@ -147,6 +147,9 @@ def main():
             )
         print("\nSynthetic data generation completed!")
     elif args.mode == 'extract':
+        if not os.path.isdir(args.feature_dir):
+            os.makedirs(args.feature_dir, exist_ok=True)
+            
         features={}
         # Extract features 
         feature_extractor = FeatureExtractor(classes=classes,device=config.device, model_name=config.clip_model, batch_size=32)
@@ -155,6 +158,10 @@ def main():
         for split_folder in os.listdir(args.input_dir):
             split_folder_path = os.path.join(args.input_dir, split_folder)
             if os.path.isdir(split_folder_path):
+                if split_folder == 'VOC2007' or split_folder == 'photo':
+                    split_folder='train'
+                elif split_folder == 'SUN09' or split_folder == 'LabelMe' or split_folder == 'Caltech101' or split_folder == 'sketch' or split_folder == 'cartoon' or split_folder == 'art_painting':
+                    split_folder='test_{split_folder}'
                 features[split_folder] = feature_extractor.process_directory(split_folder_path)
         torch.save(features, os.path.join(args.feature_dir, 'real_data.pt'))
 

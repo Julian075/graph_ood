@@ -9,7 +9,7 @@
 *.err
 *.tar.gz
 __pycache__/
-*.py[cod]
+*.pyc
 *wandb/
 *.pth
 *.pth.tar

@@ -39,6 +39,8 @@ def parse_args():
                       help='Use synthetic data (True/False)')
     parser.add_argument('--synthetic_dir', type=str, required=False,
                       help='Directory to store synthetic images')
+    parser.add_argument('--synthetic_dir2', type=str, required=False,
+                      help='Directory 2 to store synthetic images')
     parser.add_argument('--feature_dir', type=str, required=False,
                       help='Directory to store features')
     parser.add_argument('--feature_dir_ood', type=str, required=False,default="",
@@ -162,6 +164,9 @@ def main():
             if os.path.isdir(args.synthetic_dir):
                     features_synthetic= feature_extractor.process_directory(args.synthetic_dir)
                     torch.save(features_synthetic, os.path.join(args.feature_dir, 'synthetic_features.pt'))
+            if os.path.isdir(args.synthetic_dir2):
+                    features_synthetic2= feature_extractor.process_directory(args.synthetic_dir2)
+                    torch.save(features_synthetic2, os.path.join(args.feature_dir, 'synthetic_features_diverse.pt'))
     elif args.mode == 'clip_test':
         clip_evaluator = ClipEvaluator(classes=classes, config=config)
         clip_evaluator.evaluate()

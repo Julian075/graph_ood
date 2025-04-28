@@ -156,6 +156,10 @@ def main():
 
         print('extracting features')
         for split_folder in os.listdir(args.input_dir):
+            # Skip hidden directories and .ipynb_checkpoints
+            if split_folder.startswith('.') or split_folder == '.ipynb_checkpoints':
+                continue
+                
             split_folder_path = os.path.join(args.input_dir, split_folder)
             if os.path.isdir(split_folder_path):
                 if split_folder == 'VOC2007' or split_folder == 'photo':
@@ -166,13 +170,14 @@ def main():
         torch.save(features, os.path.join(args.feature_dir, 'real_data.pt'))
 
         if args.use_synthetic_data:
-
             print('extracting features from synthetic data')
             if os.path.isdir(args.synthetic_dir):
-                    features_synthetic= feature_extractor.process_directory(args.synthetic_dir)
+                if not any(d.startswith('.') for d in os.listdir(args.synthetic_dir)):  # Skip if only contains hidden dirs
+                    features_synthetic = feature_extractor.process_directory(args.synthetic_dir)
                     torch.save(features_synthetic, os.path.join(args.feature_dir, 'synthetic_features.pt'))
             if os.path.isdir(args.synthetic_dir2):
-                    features_synthetic2= feature_extractor.process_directory(args.synthetic_dir2)
+                if not any(d.startswith('.') for d in os.listdir(args.synthetic_dir2)):  # Skip if only contains hidden dirs
+                    features_synthetic2 = feature_extractor.process_directory(args.synthetic_dir2)
                     torch.save(features_synthetic2, os.path.join(args.feature_dir, 'synthetic_features_diverse.pt'))
     elif args.mode == 'clip_test':
         clip_evaluator = ClipEvaluator(classes=classes, config=config)

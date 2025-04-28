@@ -172,11 +172,9 @@ def main():
         if args.use_synthetic_data:
             print('extracting features from synthetic data')
             if os.path.isdir(args.synthetic_dir):
-                if not any(d.startswith('.') for d in os.listdir(args.synthetic_dir)):  # Skip if only contains hidden dirs
                     features_synthetic = feature_extractor.process_directory(args.synthetic_dir)
                     torch.save(features_synthetic, os.path.join(args.feature_dir, 'synthetic_features.pt'))
             if os.path.isdir(args.synthetic_dir2):
-                if not any(d.startswith('.') for d in os.listdir(args.synthetic_dir2)):  # Skip if only contains hidden dirs
                     features_synthetic2 = feature_extractor.process_directory(args.synthetic_dir2)
                     torch.save(features_synthetic2, os.path.join(args.feature_dir, 'synthetic_features_diverse.pt'))
     elif args.mode == 'clip_test':

@@ -72,11 +72,16 @@ class FeatureExtractor:
     def extract_from_paths(self, image_paths: List[str], num_workers: int = 4) -> torch.Tensor:
         """Extract features from a list of image paths using DataLoader"""
         dataset = ImageDataset(image_paths, self.preprocess)
+        def my_collate(batch):
+            batch = list(filter(lambda x: x is not None, batch))
+            return torch.utils.data.default_collate(batch)
+
         dataloader = DataLoader(
             dataset, 
             batch_size=self.batch_size,
             num_workers=num_workers,
-            pin_memory=True
+            pin_memory=True,
+            collate_fn=my_collate
         )
         
         features = []

@@ -196,17 +196,19 @@ def main():
         feature_extractor = FeatureExtractor(classes=classes, device=config.device, model_name=config.clip_model, batch_size=32)
 
         print('extracting features')
-        # Process main directory
+        # Process main directory with splits
         features = feature_extractor.process_directory(args.input_dir)
         torch.save(features, os.path.join(args.feature_dir, 'real_data.pt'))
 
         if args.use_synthetic_data:
             print('extracting features from synthetic data')
             if os.path.isdir(args.synthetic_dir):
-                synthetic_features = feature_extractor.process_directory(args.synthetic_dir)
+                # Process synthetic directory (flat structure)
+                synthetic_features = feature_extractor.process_synthetic_directory(args.synthetic_dir)
                 torch.save(synthetic_features, os.path.join(args.feature_dir, 'synthetic_features.pt'))
             if os.path.isdir(args.synthetic_dir2):
-                synthetic_features2 = feature_extractor.process_directory(args.synthetic_dir2)
+                # Process second synthetic directory (flat structure)
+                synthetic_features2 = feature_extractor.process_synthetic_directory(args.synthetic_dir2)
                 torch.save(synthetic_features2, os.path.join(args.feature_dir, 'synthetic_features_diverse.pt'))
     elif args.mode == 'clip_test':
         clip_evaluator = ClipEvaluator(classes=classes, config=config)

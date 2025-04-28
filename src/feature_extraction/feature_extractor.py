@@ -177,3 +177,47 @@ class FeatureExtractor:
             raise ValueError(f"No valid data found in {data_dir}")
             
         return result 
+
+    def process_synthetic_directory(self, data_dir: str) -> Dict[str, Union[torch.Tensor, List[str]]]:
+        """Process a directory of synthetic images
+        
+        Args:
+            data_dir: Path to the directory containing synthetic images
+            
+        Returns:
+            Dictionary with structure:
+            {
+                'features': torch.Tensor,  # shape [N, 512]
+                'labels': List[str],
+                'paths': List[str]
+            }
+        """
+        print(f"\nProcessing synthetic directory: {data_dir}")
+        
+        # Initialize lists for all data
+        all_features = []
+        all_labels = []
+        all_paths = []
+        
+        # Process each class directory
+        for class_dir in os.listdir(data_dir):
+            class_path = os.path.join(data_dir, class_dir)
+            if os.path.isdir(class_path):
+                image_paths, labels = self.get_image_paths_and_labels(class_path)
+                if image_paths:
+                    features = self.extract_from_paths(image_paths)
+                    all_features.append(features)
+                    all_labels.extend(labels)
+                    all_paths.extend(image_paths)
+        
+        if not all_features:
+            raise ValueError(f"No valid data found in {data_dir}")
+            
+        # Concatenate all features
+        result = {
+            'features': torch.cat(all_features),
+            'labels': all_labels,
+            'paths': all_paths
+        }
+            
+        return result 
